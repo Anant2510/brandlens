@@ -1,0 +1,33 @@
+{
+  "name": "@brandlens/worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BrandLens background worker \u2014 pg-boss handlers for ingestion, analysis, learning and delivery.",
+  "main": "dist/apps/worker/src/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json",
+    "start": "node dist/apps/worker/src/main.js",
+    "start:dev": "tsx watch src/main.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@brandlens/contracts": "workspace:*",
+    "@brandlens/db": "workspace:*",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.36.4",
+    "pg": "^8.13.1",
+    "pg-boss": "^10.1.5",
+    "pino": "^9.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@brandlens/api": "workspace:*",
+    "@types/node": "^22.9.0",
+    "tsc-alias": "^1.8.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

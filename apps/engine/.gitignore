@@ -1,0 +1,14 @@
+# Local virtualenv used for development and CI on the Windows VM.
+.venv/
+venv/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Engine scratch. Configurable via ENGINE_TEMP_DIR / ENGINE_DERIVATIVES_DIR;
+# these are the defaults relative to the engine directory.
+.engine-tmp/
+derivatives/

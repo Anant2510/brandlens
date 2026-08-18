@@ -1,0 +1,42 @@
+# BrandLens analysis engine — runtime dependencies.
+#
+# Hard constraint: this service ships to a Windows VM with no Docker and no
+# compiler toolchain. Every pin below must resolve to a pure-Python wheel or a
+# prebuilt win_amd64 / manylinux wheel. Nothing here builds from source.
+# Explicitly excluded: torch, paddlepaddle, tensorflow, dlib, pyahocorasick
+# (the Aho-Corasick matcher is implemented in pure Python in copy_checks.py).
+
+# --- web layer ---------------------------------------------------------------
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+pydantic>=2.6,<3.0
+pydantic-settings>=2.2,<3.0
+python-multipart>=0.0.9
+orjson>=3.9
+
+# --- transport / resilience --------------------------------------------------
+httpx>=0.27,<1.0
+tenacity>=8.2,<10.0
+structlog>=24.1
+
+# --- numerics / CV -----------------------------------------------------------
+numpy>=1.26,<3.0
+scipy>=1.11
+scikit-image>=0.22
+scikit-learn>=1.4
+opencv-python-headless>=4.9,<5.0
+pillow>=10.2
+
+# --- document parsing --------------------------------------------------------
+pymupdf>=1.24
+python-pptx>=0.6.23
+
+# --- text / hashing ----------------------------------------------------------
+rapidfuzz>=3.6
+# textstat is pinned: 0.7.8+ moved syllable counting onto NLTK's `cmudict`,
+# which is a runtime *download*. This service must work on an air-gapped
+# Windows VM, so we stay on the pyphen-backed line (dictionaries ship in
+# the wheel). copy_checks.py additionally falls back to a vendored Flesch
+# implementation if any textstat metric raises.
+textstat>=0.7.5,<0.7.8
+ImageHash>=4.3.1

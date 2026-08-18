@@ -1,0 +1,279 @@
+@import 'tailwindcss';
+
+/* ==========================================================================
+ * BrandLens console design tokens.
+ *
+ * Dense, calm, professional: this is an inspection tool. Neutral slate,
+ * a single indigo accent, and semantic severity colors that survive both
+ * themes at >= 4.5:1 against their own surfaces.
+ * ========================================================================== */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+
+  --bg: oklch(0.985 0.002 250);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.975 0.003 250);
+  --surface-3: oklch(0.955 0.005 250);
+  --border: oklch(0.9 0.006 250);
+  --border-strong: oklch(0.83 0.01 250);
+
+  --fg: oklch(0.22 0.02 260);
+  --fg-muted: oklch(0.5 0.015 258);
+  --fg-subtle: oklch(0.62 0.012 258);
+
+  --accent: oklch(0.52 0.19 275);
+  --accent-hover: oklch(0.46 0.19 275);
+  --accent-fg: oklch(0.99 0 0);
+  --accent-soft: oklch(0.95 0.03 275);
+  --accent-soft-fg: oklch(0.4 0.16 275);
+
+  --ring: oklch(0.55 0.18 275);
+
+  /* Severity ladder — blocker red, major amber, minor sky, advisory slate. */
+  --sev-blocker: oklch(0.53 0.21 25);
+  --sev-blocker-soft: oklch(0.955 0.028 25);
+  --sev-blocker-fg: oklch(0.43 0.19 25);
+
+  --sev-major: oklch(0.58 0.14 68);
+  --sev-major-soft: oklch(0.96 0.04 82);
+  --sev-major-fg: oklch(0.44 0.11 62);
+
+  --sev-minor: oklch(0.55 0.13 240);
+  --sev-minor-soft: oklch(0.955 0.03 240);
+  --sev-minor-fg: oklch(0.42 0.12 240);
+
+  --sev-advisory: oklch(0.55 0.02 258);
+  --sev-advisory-soft: oklch(0.95 0.004 258);
+  --sev-advisory-fg: oklch(0.42 0.015 258);
+
+  --ok: oklch(0.52 0.13 155);
+  --ok-soft: oklch(0.95 0.03 155);
+  --ok-fg: oklch(0.4 0.12 155);
+
+  --warn: oklch(0.58 0.14 68);
+  --danger: oklch(0.53 0.21 25);
+
+  /* Chart series — accessible in both themes, distinguishable in greyscale. */
+  --chart-1: oklch(0.55 0.17 275);
+  --chart-2: oklch(0.6 0.13 200);
+  --chart-3: oklch(0.62 0.13 155);
+  --chart-4: oklch(0.66 0.13 75);
+  --chart-5: oklch(0.58 0.17 20);
+  --chart-6: oklch(0.55 0.14 320);
+  --chart-grid: oklch(0.9 0.006 250);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --bg: oklch(0.17 0.012 265);
+  --surface: oklch(0.21 0.014 265);
+  --surface-2: oklch(0.245 0.015 265);
+  --surface-3: oklch(0.28 0.016 265);
+  --border: oklch(0.31 0.016 265);
+  --border-strong: oklch(0.4 0.018 265);
+
+  --fg: oklch(0.94 0.005 260);
+  --fg-muted: oklch(0.73 0.012 258);
+  --fg-subtle: oklch(0.62 0.014 258);
+
+  --accent: oklch(0.68 0.16 278);
+  --accent-hover: oklch(0.74 0.15 278);
+  --accent-fg: oklch(0.17 0.02 278);
+  --accent-soft: oklch(0.3 0.06 278);
+  --accent-soft-fg: oklch(0.85 0.09 278);
+
+  --ring: oklch(0.7 0.15 278);
+
+  --sev-blocker: oklch(0.68 0.19 25);
+  --sev-blocker-soft: oklch(0.3 0.08 25);
+  --sev-blocker-fg: oklch(0.85 0.11 25);
+
+  --sev-major: oklch(0.78 0.14 78);
+  --sev-major-soft: oklch(0.31 0.06 70);
+  --sev-major-fg: oklch(0.88 0.11 82);
+
+  --sev-minor: oklch(0.72 0.12 235);
+  --sev-minor-soft: oklch(0.3 0.06 240);
+  --sev-minor-fg: oklch(0.86 0.08 235);
+
+  --sev-advisory: oklch(0.68 0.015 258);
+  --sev-advisory-soft: oklch(0.28 0.012 258);
+  --sev-advisory-fg: oklch(0.82 0.01 258);
+
+  --ok: oklch(0.72 0.14 158);
+  --ok-soft: oklch(0.29 0.06 158);
+  --ok-fg: oklch(0.86 0.11 158);
+
+  --warn: oklch(0.78 0.14 78);
+  --danger: oklch(0.68 0.19 25);
+
+  --chart-1: oklch(0.7 0.15 278);
+  --chart-2: oklch(0.73 0.12 200);
+  --chart-3: oklch(0.74 0.13 158);
+  --chart-4: oklch(0.79 0.13 78);
+  --chart-5: oklch(0.7 0.16 22);
+  --chart-6: oklch(0.7 0.13 320);
+  --chart-grid: oklch(0.31 0.016 265);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-fg: var(--accent-soft-fg);
+
+  --color-ring: var(--ring);
+
+  --color-blocker: var(--sev-blocker);
+  --color-blocker-soft: var(--sev-blocker-soft);
+  --color-blocker-fg: var(--sev-blocker-fg);
+  --color-major: var(--sev-major);
+  --color-major-soft: var(--sev-major-soft);
+  --color-major-fg: var(--sev-major-fg);
+  --color-minor: var(--sev-minor);
+  --color-minor-soft: var(--sev-minor-soft);
+  --color-minor-fg: var(--sev-minor-fg);
+  --color-advisory: var(--sev-advisory);
+  --color-advisory-soft: var(--sev-advisory-soft);
+  --color-advisory-fg: var(--sev-advisory-fg);
+
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-ok-fg: var(--ok-fg);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  --font-mono:
+    ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, 'Liberation Mono', 'Courier New', monospace;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* A visible focus ring is a compliance requirement, not a preference. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--accent-soft-fg);
+  }
+
+  [data-slot='scroll'],
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+
+  table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9em;
+  }
+}
+
+@keyframes bl-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes bl-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes bl-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.animate-fade-in {
+  animation: bl-fade-in 120ms ease-out;
+}
+
+.animate-slide-up {
+  animation: bl-slide-up 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-skeleton {
+  animation: bl-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

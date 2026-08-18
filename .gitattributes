@@ -1,0 +1,67 @@
+# ===========================================================================
+# Line endings — you write code on macOS, you run it on Windows Server.
+#
+# Without this file, Git on Windows checks files out with CRLF by default and
+# the failures are baffling rather than obvious:
+#
+#   * a shell script or Dockerfile fails with "\r: command not found"
+#   * a .sql migration whose hash is checked against a journal no longer matches
+#   * prettier/eslint report every single line of every file as changed
+#   * two developers on different platforms produce diffs with no real content
+#
+# Rule: LF in the repository, always. Windows tooling — PowerShell, Node,
+# Python, Postgres — all read LF without complaint. The only exceptions are
+# files Windows itself opens, where CRLF genuinely matters.
+# ===========================================================================
+
+* text=auto eol=lf
+
+# --- Windows-native files ---------------------------------------------------
+# Notepad (which an operator WILL use to edit .env on the VM) renders LF-only
+# files as one unbroken line. Batch files must be CRLF or cmd.exe mis-parses
+# multi-line constructs.
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.psd1  text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# --- explicitly LF ----------------------------------------------------------
+*.sh        text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.cjs       text eol=lf
+*.mjs       text eol=lf
+*.json      text eol=lf
+*.py        text eol=lf
+*.sql       text eol=lf
+*.md        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.css       text eol=lf
+Caddyfile   text eol=lf
+.env.example text eol=crlf
+
+# --- binary -----------------------------------------------------------------
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+
+# --- diff hygiene -----------------------------------------------------------
+# Lockfiles are generated: collapse them in PR review rather than scrolling
+# 9,000 lines of hashes looking for the one dependency that changed.
+pnpm-lock.yaml   -diff linguist-generated=true
+packages/db/drizzle/meta/*.json -diff linguist-generated=true
+
+# Generated migration SQL is committed and MUST be reviewed, so it keeps a
+# normal diff. Only the journal metadata above is collapsed.

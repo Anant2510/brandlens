@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brandlens-engine"
+version = "1.0.0"
+description = "BrandLens analysis engine — tiered brand-compliance measurement and judgment"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+# Kept in lockstep with requirements.txt. Every dependency must resolve to a
+# prebuilt wheel on win_amd64 — the target VM has no compiler toolchain.
+dependencies = [
+  "fastapi>=0.110,<1.0",
+  "uvicorn[standard]>=0.27,<1.0",
+  "pydantic>=2.6,<3.0",
+  "pydantic-settings>=2.2,<3.0",
+  "python-multipart>=0.0.9",
+  "orjson>=3.9",
+  "httpx>=0.27,<1.0",
+  "tenacity>=8.2,<10.0",
+  "structlog>=24.1",
+  "numpy>=1.26,<3.0",
+  "scipy>=1.11",
+  "scikit-image>=0.22",
+  "scikit-learn>=1.4",
+  "opencv-python-headless>=4.9,<5.0",
+  "pillow>=10.2",
+  "pymupdf>=1.24",
+  "python-pptx>=0.6.23",
+  "rapidfuzz>=3.6",
+  "textstat>=0.7.5,<0.7.8",  # 0.7.8+ needs an NLTK corpus download; must work air-gapped
+  "ImageHash>=4.3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4", "mypy>=1.9"]
+
+[tool.setuptools.packages.find]
+include = ["brandlens_engine*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008"]
+
+[tool.mypy]
+python_version = "3.11"
+plugins = []
+ignore_missing_imports = true
+warn_unused_ignores = false

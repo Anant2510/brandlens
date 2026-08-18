@@ -1,0 +1,101 @@
+# =============================================================================
+#  OPTIONAL — DEVELOPER MACHINES ONLY. NOT THE SUPPORTED PRODUCTION PATH.
+# =============================================================================
+#
+#  The supported production deployment for BrandLens is a single Windows
+#  Server / Windows 11 VM with NO Docker, driven by the PowerShell scripts in
+#  infra/windows/ and supervised by PM2. See docs/deployment-windows.md.
+#
+#  This file exists for exactly one reason: giving a developer on macOS or
+#  Linux a PostgreSQL with pgvector already compiled in, so they can exercise
+#  the ANN code path without building the extension by hand.
+#
+#  It deliberately does NOT containerise the four BrandLens services. Running
+#  them in containers here would create a second deployment topology that
+#  nobody operates, and the first time it drifted from the Windows scripts the
+#  documentation would become fiction. Run the services on your host:
+#
+#      docker compose -f infra/docker/docker-compose.yml up -d
+#      pnpm install
+#      pnpm db:generate && pnpm db:migrate && pnpm db:seed
+#      pnpm dev:api      # terminal 1
+#      pnpm dev:worker   # terminal 2
+#      pnpm dev:web      # terminal 3
+#      cd apps/engine && python -m uvicorn brandlens_engine.main:app --reload  # terminal 4
+#
+#  Matching .env:
+#      DATABASE_URL=postgresql://brandlens:brandlens@localhost:5432/brandlens
+#
+#  There is no Redis service and there never will be: the queue is pg-boss,
+#  which lives in this same PostgreSQL. There is no MinIO either — the default
+#  storage driver writes to ./.storage on the local filesystem. Both of those
+#  are ADR-level decisions (docs/adr/0002, docs/adr/0009), not omissions.
+# =============================================================================
+
+name: brandlens-dev
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 with pgvector.
+  #
+  # pgvector is OPTIONAL in BrandLens — the schema always populates a portable
+  # real[] column and falls back to an in-SQL cosine function. This image has
+  # the extension available so the *other* branch gets exercised in
+  # development, which is the only reason to prefer it over a plain postgres:16.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: brandlens-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: brandlens
+      POSTGRES_PASSWORD: brandlens
+      POSTGRES_DB: brandlens
+      # Matches the collation a default Windows EnterpriseDB install produces,
+      # so ORDER BY results do not differ between a developer's box and the VM.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      # Bound to loopback: a database on 0.0.0.0 with a guessable password is
+      # a bad idea even on a laptop.
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    command:
+      # pg-boss is chatty; the defaults for a container are too small to be
+      # representative of the Windows VM's tuning.
+      - postgres
+      - '-c'
+      - 'max_connections=200'
+      - '-c'
+      - 'shared_buffers=512MB'
+      - '-c'
+      - 'work_mem=16MB'
+      # Log anything slower than 500ms so N+1 queries are visible in dev.
+      - '-c'
+      - 'log_min_duration_statement=500'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U brandlens -d brandlens']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Optional: a webhook sink for testing outbox delivery + HMAC signatures.
+  #
+  # Start it with:  docker compose --profile tools up -d
+  # Then register:  POST /v1/webhooks { "url": "http://host.docker.internal:8025", ... }
+  # ---------------------------------------------------------------------------
+  webhook-sink:
+    image: mendhak/http-https-echo:34
+    container_name: brandlens-webhook-sink
+    profiles: ['tools']
+    restart: unless-stopped
+    environment:
+      HTTP_PORT: '8025'
+    ports:
+      - '127.0.0.1:8025:8025'
+
+volumes:
+  postgres-data:
+    name: brandlens-postgres-data

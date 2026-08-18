@@ -1,0 +1,117 @@
+# ============================================================================
+# BrandLens
+# ============================================================================
+
+# --- dependencies -----------------------------------------------------------
+node_modules/
+.pnpm-store/
+.pnp.*
+.yarn/
+
+# --- build output -----------------------------------------------------------
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# --- Next.js ----------------------------------------------------------------
+.next/
+.vercel/
+next-env.d.ts
+
+# --- Python -----------------------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# --- environment ------------------------------------------------------------
+# .env.example IS committed and is the documentation for every variable.
+# Nothing else that looks like a real .env ever is.
+.env
+.env.*
+!.env.example
+
+# --- drizzle ----------------------------------------------------------------
+# Migrations ARE committed. Do not add packages/db/drizzle/ here.
+#
+# `pnpm db:generate` diffs the schema and writes versioned SQL plus a journal
+# in meta/. That output is source, not build artefact:
+#
+#   * The Windows VM must apply the EXACT SQL that was reviewed and tested on a
+#     developer machine. Regenerating on the server means production runs DDL
+#     no human ever read.
+#   * meta/_journal.json is the applied-migration ledger. If each machine keeps
+#     its own, they disagree about what has run, and `db:migrate` either
+#     re-applies a migration or silently skips one.
+#   * A migration that renames a column is a data decision. It belongs in a
+#     pull request, next to the code that depends on it.
+#
+# Generate locally, commit the result, review the SQL in the PR, and let the VM
+# only ever run `db:migrate`.
+
+# --- runtime state ----------------------------------------------------------
+.storage/
+logs/
+*.log
+backups/
+tmp/
+temp/
+
+# --- PM2 --------------------------------------------------------------------
+.pm2/
+ecosystem.local.cjs
+
+# --- generated seed output ---------------------------------------------------
+# seed/assets/** IS committed: the logo and creative PNGs are reviewable
+# fixtures, and a reviewer should be able to open them in a diff.
+seed/output/
+
+# --- test artifacts ----------------------------------------------------------
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+*.lcov
+
+# --- editors -----------------------------------------------------------------
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ----------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+ehthumbs.db
+
+# --- secrets and certificates -------------------------------------------------
+*.pem
+*.key
+*.pfx
+*.p12
+certs/
+secrets/
+
+# --- misc ---------------------------------------------------------------------
+*.tgz
+*.zip
+!infra/**/*.zip
+infra/wheels/
+.turbo/
+.cache/

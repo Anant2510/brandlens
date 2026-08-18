@@ -1,0 +1,326 @@
+# ===========================================================================
+# BrandLens — Continuous Integration
+#
+# WHAT THIS IS, PLAINLY
+# GitHub keeps a pool of clean, throwaway computers. Every time you push code
+# or open a pull request, it rents one, checks your branch out onto it, and
+# runs the commands below. If any command fails, the pull request gets a red X
+# and GitHub tells you which step broke.
+#
+# It is the same checks you would run by hand before deploying — typecheck,
+# lint, tests, and a real migration against a real Postgres — except they run
+# every single time, on a machine with none of your local state. Nobody has to
+# remember, and "it worked on my Mac" stops being a possible explanation.
+#
+# The point for this project specifically: you develop on macOS and deploy to
+# a Windows VM. CI is where you find out that a path separator, a line ending
+# or a case-sensitive import is broken — instead of finding out on the server.
+#
+# YOU DO NOT NEED TO CONFIGURE ANYTHING. Push this file to GitHub and it runs.
+# Watch it under the "Actions" tab of the repository.
+# ===========================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Lets you re-run everything from the Actions tab without pushing a commit.
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first run still in progress.
+# Without this, pushing three fixes in a row queues three full runs and you
+# wait for answers about code you have already replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+  PNPM_VERSION: '9.12.3'
+
+jobs:
+  # =========================================================================
+  # 1 — The main gate. Runs on every push and every pull request.
+  # =========================================================================
+  verify:
+    name: Typecheck · lint · test (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      # --frozen-lockfile fails if package.json and pnpm-lock.yaml disagree.
+      # That is deliberate: it catches a dependency added on someone's machine
+      # without committing the lockfile, which would otherwise install a
+      # different dependency tree on the VM than the one that was tested.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test
+
+      # The web app is the only part whose build can fail for reasons the
+      # typechecker does not catch (server/client boundary violations, bad
+      # imports in route handlers), so it gets built here rather than only on
+      # the VM at deploy time.
+      - name: Build
+        run: pnpm build
+
+  # =========================================================================
+  # 2 — Migrations against a real PostgreSQL.
+  #
+  # This is the job that protects the VM. A migration that fails here would
+  # otherwise fail halfway through `deploy.ps1` against production data.
+  # GitHub runs a throwaway Postgres alongside the job for us.
+  # =========================================================================
+  migrations:
+    name: Migrations + seed (real Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: brandlens
+          POSTGRES_PASSWORD: brandlens
+          POSTGRES_DB: brandlens
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://brandlens:brandlens@localhost:5432/brandlens
+      STORAGE_DRIVER: local
+      STORAGE_LOCAL_ROOT: ./.storage
+      # Real-looking values so nothing falls back to a dev default. These are
+      # throwaway CI credentials for a database destroyed minutes from now —
+      # never reuse them anywhere.
+      JWT_ACCESS_SECRET: ci-access-secret-not-used-anywhere-else-0001
+      JWT_REFRESH_SECRET: ci-refresh-secret-not-used-anywhere-else-002
+      API_KEY_PEPPER: ci-pepper-not-used-anywhere-else
+      STORAGE_SIGNING_SECRET: ci-storage-signing-not-used-anywhere-else
+      ENGINE_SHARED_SECRET: ci-engine-secret-not-used-anywhere-else
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Migrations are committed, so CI only ever APPLIES them. It never
+      # generates them — see the note in .gitignore for why.
+      - name: Apply migrations
+        run: pnpm db:migrate
+
+      # Catches the mistake that is easy to make and painful to find: editing
+      # the schema and forgetting to run `pnpm db:generate`. Without this, the
+      # VM migrates to an older shape than the code expects and fails at
+      # runtime with a missing-column error instead of at deploy time.
+      - name: Fail if the schema has uncommitted migrations
+        run: |
+          pnpm db:generate
+          if [ -n "$(git status --porcelain packages/db/drizzle)" ]; then
+            echo "::error::The Drizzle schema changed but no migration was committed."
+            echo "Run 'pnpm db:generate' locally, review the SQL, and commit packages/db/drizzle/."
+            git status --porcelain packages/db/drizzle
+            git diff -- packages/db/drizzle | head -100
+            exit 1
+          fi
+          echo "Schema and committed migrations agree."
+
+      - name: Seed
+        run: pnpm db:seed
+
+      # Idempotency is a promise the seed makes; this is where it gets kept.
+      - name: Seed again — must be idempotent
+        run: pnpm db:seed
+
+      - name: Verify row counts and RLS
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "SET app.bypass_rls='on';" \
+            -c "SELECT 'brands' t, count(*) FROM brands
+                UNION ALL SELECT 'rules', count(*) FROM rules
+                UNION ALL SELECT 'assets', count(*) FROM assets
+                UNION ALL SELECT 'channel_specs', count(*) FROM channel_specs;"
+          echo "-- tables with RLS forced --"
+          psql "$DATABASE_URL" -tAc \
+            "SELECT count(*) FROM pg_class WHERE relrowsecurity AND relforcerowsecurity;"
+
+  # =========================================================================
+  # 3 — The Python analysis engine.
+  # =========================================================================
+  engine:
+    name: Engine tests (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/engine/requirements.txt
+
+      - name: Install
+        working-directory: apps/engine
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Tests
+        working-directory: apps/engine
+        run: python -m pytest -q -p no:warnings
+
+      # The engine must boot and report its own capabilities honestly. With no
+      # API keys configured it should come up "degraded" — running every T0/T1
+      # check and abstaining on T2 — NOT crash. That behaviour is a product
+      # guarantee, so it is tested rather than assumed.
+      - name: Boots and self-reports without credentials
+        working-directory: apps/engine
+        run: |
+          python -m uvicorn brandlens_engine.main:app --host 127.0.0.1 --port 8000 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/health >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8000/health | tee /dev/stderr | grep -q '"status":"ok"'
+          curl -sf -H "X-Engine-Secret: ci-engine-secret-not-used-anywhere-else" \
+            http://127.0.0.1:8000/health/deep \
+            | python -c "import json,sys; d=json.load(sys.stdin); \
+                print('status', d['status'], '·', len(d['analyzers']), 'analyzers'); \
+                assert d['status'] in ('ok','degraded'), d['status']; \
+                assert len(d['analyzers']) > 20, 'analyzer registry looks empty'"
+
+  # =========================================================================
+  # 4 — Windows.
+  #
+  # Runs only on main and on manual dispatch, NOT on every pull request.
+  # Windows runners bill at 2x the minutes of Linux ones on private repos, and
+  # the platform-specific failures we care about — path separators, line
+  # endings, case-sensitive imports, native module builds — need to be caught
+  # before deploying, not on every intermediate commit of a branch.
+  #
+  # This is the closest thing to a dress rehearsal for the VM.
+  # =========================================================================
+  windows:
+    name: Build + test (Windows — mirrors the VM)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Engine install + tests
+        working-directory: apps/engine
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -r requirements.txt
+          .venv\Scripts\python.exe -m pytest -q -p no:warnings
+
+      # The deployment scripts are PowerShell. A syntax error in deploy.ps1 is
+      # only discovered when someone runs it on the server, mid-deploy, which
+      # is the worst possible moment. Parsing them here is nearly free.
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem infra/windows -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) {
+              Write-Host "::error file=$($_.FullName)::$($errors[0].Message)"
+              $failed = $true
+            } else {
+              Write-Host "ok  $($_.Name)"
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: PM2 ecosystem config is valid
+        run: node -e "const c=require('./infra/windows/ecosystem.config.cjs'); if(c.apps.length!==4) throw new Error('expected 4 apps, got '+c.apps.length); console.log('apps:', c.apps.map(a=>a.name).join(', '))"
+
+  # =========================================================================
+  # 5 — A single status check to require in branch protection.
+  #
+  # GitHub lets you block merging until named checks pass. Requiring this one
+  # job is easier than listing four, and it stays correct when jobs are added.
+  # =========================================================================
+  ci-passed:
+    name: CI passed
+    runs-on: ubuntu-latest
+    needs: [verify, migrations, engine]
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          echo "verify:     ${{ needs.verify.result }}"
+          echo "migrations: ${{ needs.migrations.result }}"
+          echo "engine:     ${{ needs.engine.result }}"
+          if [ "${{ needs.verify.result }}" != "success" ] \
+          || [ "${{ needs.migrations.result }}" != "success" ] \
+          || [ "${{ needs.engine.result }}" != "success" ]; then
+            echo "::error::One or more required jobs failed."
+            exit 1
+          fi
+          echo "All required checks passed."

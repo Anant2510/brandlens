@@ -1,0 +1,152 @@
+BrandLens — Proprietary Software Licence
+Copyright (c) 2026 BrandLens. All rights reserved.
+
+================================================================================
+NOTICE
+================================================================================
+
+This software and its accompanying documentation (the "Software") are
+proprietary and confidential. The Software is licensed, not sold.
+
+No licence, right or interest in the Software is granted except as expressly
+set out in a separate written agreement executed between you and BrandLens (a
+"Licence Agreement"). If you have not executed a Licence Agreement, you have
+no right to use, copy, modify or distribute the Software.
+
+================================================================================
+1. GRANT
+================================================================================
+
+Subject to a valid Licence Agreement and to payment of all applicable fees,
+BrandLens grants you a non-exclusive, non-transferable, non-sublicensable
+licence to install and use the Software for your internal business purposes,
+for the term and within the limits (users, environments, volume) stated in that
+agreement.
+
+================================================================================
+2. RESTRICTIONS
+================================================================================
+
+Except as expressly permitted by a Licence Agreement or by mandatory applicable
+law, you may not:
+
+  (a) copy, reproduce or distribute the Software;
+  (b) modify, adapt or create derivative works of the Software;
+  (c) reverse engineer, decompile or disassemble the Software, or otherwise
+      attempt to derive its source code where it is not provided to you;
+  (d) sublicense, rent, lease, lend, sell or otherwise transfer the Software;
+  (e) remove, obscure or alter any proprietary notice contained in the
+      Software;
+  (f) use the Software to provide a service bureau, time-sharing or
+      managed-service offering to third parties;
+  (g) use the Software to develop a competing product; or
+  (h) publish or disclose the results of any benchmark of the Software without
+      BrandLens's prior written consent.
+
+================================================================================
+3. OWNERSHIP
+================================================================================
+
+BrandLens and its licensors retain all right, title and interest in and to the
+Software, including all intellectual property rights. Nothing in this notice
+transfers ownership of anything.
+
+You retain all right, title and interest in and to the data you submit to the
+Software, including your brand assets, brand guidelines, creative content and
+the decision records generated from them ("Customer Data"). BrandLens claims no
+ownership of Customer Data.
+
+================================================================================
+4. THIRD-PARTY COMPONENTS
+================================================================================
+
+The Software incorporates third-party open-source components, each licensed
+under its own terms. Those terms govern those components and take precedence
+over this notice to the extent of any conflict. A complete inventory is
+produced by:
+
+    pnpm licenses list --prod
+    pip-licenses --format=markdown        (in apps/engine)
+
+Notable components include, without limitation: NestJS (MIT), Next.js (MIT),
+React (MIT), Drizzle ORM (Apache-2.0), pg-boss (MIT), zod (MIT), FastAPI (MIT),
+uvicorn (BSD-3-Clause), NumPy (BSD-3-Clause), SciPy (BSD-3-Clause),
+scikit-image (BSD-3-Clause), scikit-learn (BSD-3-Clause), OpenCV
+(Apache-2.0), Pillow (MIT-CMU), PyMuPDF (AGPL-3.0 or a commercial licence from
+Artifex), python-pptx (MIT), RapidFuzz (MIT), PostgreSQL (PostgreSQL Licence),
+pgvector (PostgreSQL Licence), Caddy (Apache-2.0) and PM2 (AGPL-3.0).
+
+IMPORTANT: PyMuPDF is distributed under AGPL-3.0 unless a commercial licence is
+obtained from Artifex Software, Inc. PM2 is distributed under AGPL-3.0.
+Distributing the Software to third parties may require a commercial licence for
+one or both. Obtain legal advice before doing so.
+
+================================================================================
+5. CONFIDENTIALITY
+================================================================================
+
+The Software, including its source code, architecture, algorithms and
+documentation, is the confidential information of BrandLens. You will protect
+it with at least the degree of care you use for your own confidential
+information, and in no event less than reasonable care.
+
+================================================================================
+6. NO WARRANTY
+================================================================================
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NONINFRINGEMENT.
+
+BrandLens does not warrant that the Software will be uninterrupted or
+error-free, or that it will detect every brand-compliance or regulatory issue.
+
+THE SOFTWARE IS A TOOL THAT ASSISTS HUMAN REVIEW. IT IS NOT A SUBSTITUTE FOR
+PROFESSIONAL LEGAL, REGULATORY OR MEDICAL REVIEW, AND ITS OUTPUT DOES NOT
+CONSTITUTE LEGAL ADVICE. YOU REMAIN SOLELY RESPONSIBLE FOR THE CONTENT YOU
+PUBLISH AND FOR ITS COMPLIANCE WITH ALL APPLICABLE LAWS, REGULATIONS AND
+ADVERTISING CODES.
+
+================================================================================
+7. LIMITATION OF LIABILITY
+================================================================================
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT WILL BRANDLENS
+OR ITS LICENSORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY OR
+CONSEQUENTIAL DAMAGES, OR FOR ANY LOSS OF PROFITS, REVENUE, DATA, GOODWILL OR
+BUSINESS INTERRUPTION, HOWEVER CAUSED AND UNDER ANY THEORY OF LIABILITY, EVEN
+IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+BRANDLENS'S TOTAL AGGREGATE LIABILITY ARISING OUT OF OR RELATING TO THE
+SOFTWARE WILL NOT EXCEED THE FEES PAID BY YOU FOR THE SOFTWARE IN THE TWELVE
+(12) MONTHS PRECEDING THE EVENT GIVING RISE TO THE CLAIM.
+
+Nothing in this notice excludes or limits liability that cannot be excluded or
+limited under applicable law.
+
+================================================================================
+8. TERMINATION
+================================================================================
+
+This licence terminates automatically if you breach any of its terms. On
+termination you must cease all use of the Software and destroy all copies in
+your possession. Sections 3 (Ownership), 5 (Confidentiality), 6 (No Warranty),
+7 (Limitation of Liability) and 9 (General) survive termination.
+
+================================================================================
+9. GENERAL
+================================================================================
+
+This notice, together with any executed Licence Agreement, is the entire
+agreement between the parties concerning the Software and supersedes all prior
+proposals and understandings, written or oral. If any provision is held
+unenforceable, it will be modified to the minimum extent necessary and the
+remaining provisions will remain in full force.
+
+================================================================================
+CONTACT
+================================================================================
+
+Licensing   licensing@brandlens.example
+Security    security@brandlens.example
+Support     support@brandlens.example

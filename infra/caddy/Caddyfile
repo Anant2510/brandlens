@@ -1,0 +1,276 @@
+# =============================================================================
+# BrandLens · Caddy reverse proxy
+#
+# Caddy is a single .exe with no dependencies, which makes it the right front
+# door for a Windows VM that is deliberately not running Docker.
+#
+#   caddy.exe run     --config infra\caddy\Caddyfile   # foreground
+#   caddy.exe validate --config infra\caddy\Caddyfile  # syntax check
+#   caddy.exe fmt     --overwrite infra\caddy\Caddyfile
+#
+# Run it as a service (recommended):
+#   caddy.exe add-package github.com/caddyserver/... is NOT needed; instead use
+#   NSSM, mirroring install-services.ps1:
+#     nssm install Caddy "C:\brandlens\bin\caddy.exe" run --config "C:\brandlens\infra\caddy\Caddyfile"
+#     nssm set Caddy AppDirectory C:\brandlens
+#     nssm set Caddy Start SERVICE_AUTO_START
+#
+# ROUTING
+#
+#   /v1/*      -> API   :4000     REST + MCP
+#   /docs*     -> API   :4000     Swagger UI
+#   /health*   -> API   :4000     liveness + readiness
+#   /metrics   -> API   :4000     Prometheus exposition (see the guard below)
+#   /          -> web   :3000     Next.js console
+#
+# The analysis engine on :8000 is NOT proxied. It authenticates with a shared
+# secret intended for a loopback hop and has no per-tenant authorisation of its
+# own — publishing it would be a direct path around the control plane's RLS.
+# =============================================================================
+
+{
+	# ---------------------------------------------------------------------
+	# Global options
+	# ---------------------------------------------------------------------
+
+	# Set a real address so a failed certificate renewal reaches a human.
+	email ops@example.com
+
+	# Caddy's own admin API. Loopback-only is the default; it is stated here
+	# because leaving it reachable is a remote config-rewrite primitive.
+	admin localhost:2019
+
+	# Structured logs, so the proxy tier matches the JSON the four services
+	# already emit and one shipper can collect everything.
+	log {
+		output file C:/brandlens/logs/caddy.log {
+			roll_size 50MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format json
+		level INFO
+	}
+
+	# --- Staging while you test ------------------------------------------
+	# Let's Encrypt rate-limits duplicate certificates to 5 per week. Point at
+	# staging until the DNS and firewall are proven, then comment this out and
+	# run `caddy reload`.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# -----------------------------------------------------------------------------
+# Shared snippets
+# -----------------------------------------------------------------------------
+
+(security_headers) {
+	header {
+		# HSTS. Only meaningful over real HTTPS; harmless on localhost.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# The console needs no camera, microphone or geolocation. Denying
+		# them removes a whole class of supply-chain surprises.
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+		X-Robots-Tag "noindex, nofollow"
+		# Do not advertise the stack.
+		-Server
+		-X-Powered-By
+	}
+}
+
+(compression) {
+	encode {
+		zstd
+		gzip 6
+		# Images, video and PDFs are already compressed; re-compressing them
+		# burns CPU on the proxy for no size win, and defeats range requests
+		# on the asset preview endpoint.
+		match {
+			header Content-Type text/*
+			header Content-Type application/json*
+			header Content-Type application/javascript*
+			header Content-Type application/xml*
+			header Content-Type image/svg+xml*
+		}
+	}
+}
+
+(api_upstream) {
+	reverse_proxy 127.0.0.1:4000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+
+		# Brand-book uploads run to tens of megabytes and a synchronous check
+		# (async:false) can legitimately take minutes. The default 0 means "no
+		# timeout"; these are explicit so the values are reviewable.
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+			dial_timeout 10s
+			# Keep connections warm — the console is chatty on the dashboard.
+			keepalive 90s
+			keepalive_idle_conns 32
+		}
+
+		health_uri /health
+		health_interval 15s
+		health_timeout 5s
+	}
+}
+
+# =============================================================================
+# LOCAL / LAN — plain HTTP, no certificates.
+#
+# This is the block that is active out of the box. `:80` matches any hostname,
+# so it works on http://localhost, http://<vm-name> and http://<ip> without
+# any DNS at all.
+# =============================================================================
+:80 {
+	import compression
+	import security_headers
+
+	log {
+		output file C:/brandlens/logs/caddy-access.log {
+			roll_size 50MiB
+			roll_keep 10
+		}
+		format json
+	}
+
+	# --- API ---------------------------------------------------------------
+	@api path /v1/* /docs /docs/* /health /health/* /swagger-ui*
+	handle @api {
+		import api_upstream
+	}
+
+	# --- Metrics -----------------------------------------------------------
+	# The API serves /metrics without authentication so a scraper needs no
+	# credentials. That is only safe while the endpoint is not public: it
+	# exposes per-tenant job counts and cost totals. Restrict it here.
+	@metrics path /metrics
+	handle @metrics {
+		@allowed remote_ip 127.0.0.1/32 ::1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+		handle @allowed {
+			reverse_proxy 127.0.0.1:4000
+		}
+		handle {
+			respond "Not found" 404
+		}
+	}
+
+	# --- Console -----------------------------------------------------------
+	handle {
+		reverse_proxy 127.0.0.1:3000 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			transport http {
+				read_timeout 120s
+				write_timeout 120s
+			}
+		}
+	}
+
+	handle_errors {
+		@5xx expression {err.status_code} >= 500
+		handle @5xx {
+			respond "BrandLens is unavailable. Check: pm2 status" {err.status_code}
+		}
+		respond "{err.status_code} {err.status_text}" {err.status_code}
+	}
+}
+
+# =============================================================================
+# PRODUCTION — automatic HTTPS.
+#
+# Uncomment this block, set the hostname, comment out the `:80` block above,
+# then:
+#
+#   1. point an A/AAAA record at the VM's public IP
+#   2. .\infra\windows\firewall.ps1            (opens 80 and 443)
+#   3. update .env:
+#        API_PUBLIC_URL=https://brandlens.example.com
+#        WEB_PUBLIC_URL=https://brandlens.example.com
+#        NEXT_PUBLIC_API_URL=https://brandlens.example.com
+#      then rebuild the console (NEXT_PUBLIC_* is inlined at build time)
+#        pnpm build && .\infra\windows\start-all.ps1
+#   4. caddy.exe reload --config infra\caddy\Caddyfile
+#
+# Caddy obtains and renews the certificate on its own. Port 80 must stay open
+# for the ACME HTTP-01 challenge and the HTTPS redirect.
+# =============================================================================
+
+# brandlens.example.com {
+# 	import compression
+# 	import security_headers
+#
+# 	log {
+# 		output file C:/brandlens/logs/caddy-access.log {
+# 			roll_size 50MiB
+# 			roll_keep 30
+# 		}
+# 		format json
+# 	}
+#
+# 	@api path /v1/* /docs /docs/* /health /health/* /swagger-ui*
+# 	handle @api {
+# 		import api_upstream
+# 	}
+#
+# 	@metrics path /metrics
+# 	handle @metrics {
+# 		@allowed remote_ip 127.0.0.1/32 ::1 10.0.0.0/8
+# 		handle @allowed {
+# 			reverse_proxy 127.0.0.1:4000
+# 		}
+# 		handle {
+# 			respond "Not found" 404
+# 		}
+# 	}
+#
+# 	handle {
+# 		reverse_proxy 127.0.0.1:3000 {
+# 			header_up X-Real-IP {remote_host}
+# 			header_up X-Forwarded-Proto {scheme}
+# 		}
+# 	}
+#
+# 	# --- TLS -------------------------------------------------------------
+# 	# Automatic by default; every line below is optional.
+# 	#
+# 	# tls {
+# 	# 	protocols tls1.2 tls1.3
+# 	# }
+# 	#
+# 	# Internal CA / air-gapped VM — no ACME, self-signed and auto-renewed:
+# 	# tls internal
+# 	#
+# 	# Corporate certificate from a file:
+# 	# tls C:/brandlens/certs/brandlens.crt C:/brandlens/certs/brandlens.key
+# 	#
+# 	# DNS-01 (needed for a wildcard, or when port 80 cannot be opened) requires
+# 	# a Caddy build that includes the DNS provider module:
+# 	#   xcaddy build --with github.com/caddy-dns/cloudflare
+# 	# tls {
+# 	# 	dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+# 	# }
+#
+# 	handle_errors {
+# 		respond "{err.status_code} {err.status_text}" {err.status_code}
+# 	}
+# }
+
+# -----------------------------------------------------------------------------
+# Optional: a separate hostname for the API only.
+#
+# Useful when partners integrate against api.example.com while staff use the
+# console at app.example.com. Keep the same upstream — the API already serves
+# both surfaces.
+# -----------------------------------------------------------------------------
+
+# api.brandlens.example.com {
+# 	import compression
+# 	import security_headers
+# 	import api_upstream
+# }
