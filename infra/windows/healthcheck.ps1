@@ -1,11 +1,11 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Probes all four BrandLens services plus the database and prints a status table.
 
 .DESCRIPTION
     Functional, not cosmetic: every row is a real request, not a process check.
-    A process can be "online" in PM2 and still be unable to serve traffic —
+    A process can be "online" in PM2 and still be unable to serve traffic --
     that is exactly the failure this script exists to catch.
 
     Checks, in order of dependency:
@@ -70,7 +70,7 @@ $webUrl = (Get-EnvValue -Key 'WEB_PUBLIC_URL' -Env $envMap -Default 'http://loca
 $engineUrl = (Get-EnvValue -Key 'ENGINE_URL' -Env $envMap -Default 'http://127.0.0.1:8000').TrimEnd('/')
 $databaseUrl = Get-EnvValue -Key 'DATABASE_URL' -Env $envMap -Default 'postgresql://brandlens:brandlens@localhost:5432/brandlens'
 
-Write-Banner 'BrandLens · healthcheck' (Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')
+Write-Banner 'BrandLens - healthcheck' (Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')
 
 $results = [System.Collections.Generic.List[object]]::new()
 
@@ -103,7 +103,7 @@ function Add-Check {
 }
 
 # ---------------------------------------------------------------------------
-# 1 — database
+# 1 -- database
 # ---------------------------------------------------------------------------
 $psql = Get-PsqlPath
 if ($psql) {
@@ -132,13 +132,13 @@ if ($psql) {
         Add-Check -Component 'database' -Ok $false -Detail $_.Exception.Message
     }
 } else {
-    # No psql on this host is not a health failure — the API's deep check
+    # No psql on this host is not a health failure -- the API's deep check
     # covers the database anyway, from the process that actually needs it.
     Add-Check -Component 'database' -Ok $true -Detail 'psql not installed; covered by api-deep' -Required $false
 }
 
 # ---------------------------------------------------------------------------
-# 2 — engine
+# 2 -- engine
 # ---------------------------------------------------------------------------
 $engine = Test-HttpEndpoint -Url "$engineUrl/health" -TimeoutSeconds $TimeoutSeconds
 if ($engine.Ok) {
@@ -155,7 +155,7 @@ if ($engine.Ok) {
 }
 
 # ---------------------------------------------------------------------------
-# 3 — api liveness
+# 3 -- api liveness
 # ---------------------------------------------------------------------------
 $api = Test-HttpEndpoint -Url "$apiUrl/health" -TimeoutSeconds $TimeoutSeconds
 if ($api.Ok) {
@@ -171,7 +171,7 @@ if ($api.Ok) {
 }
 
 # ---------------------------------------------------------------------------
-# 4 — api readiness (every dependency, from inside the process)
+# 4 -- api readiness (every dependency, from inside the process)
 # ---------------------------------------------------------------------------
 $deepDetails = @()
 if ($api.Ok) {
@@ -183,7 +183,7 @@ if ($api.Ok) {
             foreach ($prop in $body.components.PSObject.Properties) {
                 if (-not $prop.Value.ok) { $bad += $prop.Name }
                 $deepDetails += [pscustomobject]@{
-                    Component = "  · $($prop.Name)"
+                    Component = "  - $($prop.Name)"
                     Status    = if ($prop.Value.ok) { 'OK' } else { 'FAIL' }
                     LatencyMs = [int]($prop.Value.latencyMs)
                     Detail    = ($prop.Value.detail | ConvertTo-Json -Compress -Depth 3)
@@ -206,11 +206,11 @@ if ($api.Ok) {
             -Detail (Format-ProbeError $deep)
     }
 } else {
-    Add-Check -Component 'api-deep' -Ok $false -Detail 'skipped — api liveness failed'
+    Add-Check -Component 'api-deep' -Ok $false -Detail 'skipped -- api liveness failed'
 }
 
 # ---------------------------------------------------------------------------
-# 5 — web console
+# 5 -- web console
 # ---------------------------------------------------------------------------
 if (-not $SkipWeb) {
     $web = Test-HttpEndpoint -Url "$webUrl/" -TimeoutSeconds $TimeoutSeconds
@@ -223,7 +223,7 @@ if (-not $SkipWeb) {
 }
 
 # ---------------------------------------------------------------------------
-# 6 — PM2 supervision
+# 6 -- PM2 supervision
 # ---------------------------------------------------------------------------
 $pm2 = Get-Pm2Command
 if ($pm2) {
@@ -291,7 +291,7 @@ foreach ($check in $failed) {
 }
 Write-Host ''
 Write-Hint @(
-    'Triage order — each layer depends on the ones above it:',
+    'Triage order -- each layer depends on the ones above it:',
     '  1. database   Get-Service postgresql* ; .\setup-database.ps1 -SkipSeed',
     '  2. engine     .\logs.ps1 -Process engine -Errors ; check apps\engine\.venv',
     '  3. api        .\logs.ps1 -Process api -Errors ; confirm DATABASE_URL in .env',

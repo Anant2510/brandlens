@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Shows what is running: PM2 processes, Windows services, and listening ports.
@@ -11,7 +11,7 @@
       * is anything actually listening on 3000 / 4000 / 8000 / 5432
 
     For a functional probe of each service (HTTP + database), use
-    healthcheck.ps1 instead — this script deliberately does no I/O against the
+    healthcheck.ps1 instead -- this script deliberately does no I/O against the
     services, so it still works when they are wedged.
 
 .PARAMETER Detailed
@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 
 if ($Json) { Set-BrandLensQuiet $true }
 
-Write-Banner 'BrandLens · status' (Get-BrandLensRoot)
+Write-Banner 'BrandLens - status' (Get-BrandLensRoot)
 
 # ---------------------------------------------------------------------------
 # PM2
@@ -75,7 +75,7 @@ if ($pm2) {
     Write-Warn 'pm2 is not installed or not on PATH'
 }
 
-# Report processes PM2 does not know about at all — "0 restarts, missing" is a
+# Report processes PM2 does not know about at all -- "0 restarts, missing" is a
 # very different situation from "errored, 47 restarts".
 $known = $processes.Name
 $missing = @($BrandLensProcesses | Where-Object { $_ -notin $known })
@@ -176,7 +176,7 @@ Write-Host '  Windows services' -ForegroundColor Cyan
 if ($services.Count -gt 0) {
     $services | Write-TableBlock
 } else {
-    Write-Info '(none found — BrandLens will not start automatically after a reboot)'
+    Write-Info '(none found -- BrandLens will not start automatically after a reboot)'
     Write-Hint @('Install it:  .\infra\windows\install-services.ps1')
 }
 

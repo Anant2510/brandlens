@@ -1,10 +1,10 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Creates the BrandLens role and database, applies migrations, seeds the demo.
 
 .DESCRIPTION
-    Run once on a fresh install, and safely again after any upgrade — every
+    Run once on a fresh install, and safely again after any upgrade -- every
     step is idempotent:
 
       1. connect as the superuser and CREATE ROLE / CREATE DATABASE if absent
@@ -13,12 +13,12 @@
       3. attempt CREATE EXTENSION vector and report, in plain language, whether
          ANN acceleration or the portable real[] fallback will be used
       4. verifies the committed migrations are present
-      5. pnpm db:migrate   — extensions, DDL, RLS policies, vector acceleration
-      6. pnpm db:seed      — the Northwind Coffee Co. demo tenant
+      5. pnpm db:migrate   -- extensions, DDL, RLS policies, vector acceleration
+      6. pnpm db:seed      -- the Northwind Coffee Co. demo tenant
 
     pgvector is OPTIONAL. BrandLens ships an in-SQL cosine similarity function
     over real[] columns and selects the driver at boot, so a database without
-    pgvector is fully supported — it is slower on large precedent galleries,
+    pgvector is fully supported -- it is slower on large precedent galleries,
     and nothing else changes.
 
 .PARAMETER DbHost
@@ -40,7 +40,7 @@
     Create the role/database only.
 
 .PARAMETER Force
-    Drop and recreate the database first. DESTRUCTIVE — refuses without
+    Drop and recreate the database first. DESTRUCTIVE -- refuses without
     -Confirm and prints exactly what it is about to destroy.
 
 .EXAMPLE
@@ -69,10 +69,10 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 
-Write-Banner 'BrandLens · database setup'
+Write-Banner 'BrandLens - database setup'
 
 # ---------------------------------------------------------------------------
-# Resolve the target from .env — the file the running services will read.
+# Resolve the target from .env -- the file the running services will read.
 # ---------------------------------------------------------------------------
 $envFile = Get-BrandLensPath '.env'
 if (-not (Test-Path $envFile)) {
@@ -127,7 +127,7 @@ if (-not $psql) {
 Write-Ok $psql
 
 # ---------------------------------------------------------------------------
-# Reachability — a clear message beats a psql connection dump.
+# Reachability -- a clear message beats a psql connection dump.
 # ---------------------------------------------------------------------------
 Write-Step 'server reachable'
 if (-not (Test-TcpPort -ComputerName $target.Host -Port $target.Port)) {
@@ -208,7 +208,7 @@ if ($Force) {
     if ($PSCmdlet.ShouldProcess("$($target.Host)/$($target.Database)", 'DROP DATABASE and recreate')) {
         Write-Step 'drop database'
         # Terminate stragglers first, or DROP fails with "is being accessed by
-        # other users" — PM2 processes hold pooled connections open.
+        # other users" -- PM2 processes hold pooled connections open.
         Invoke-Psql -Tolerant -Sql @"
 SELECT pg_terminate_backend(pid) FROM pg_stat_activity
 WHERE datname = $(& $sq $target.Database) AND pid <> pg_backend_pid();
@@ -275,12 +275,12 @@ ALTER SCHEMA public OWNER TO $(& $qi $target.User);
         Write-Ok 'schema public owned by the app role'
     } catch {
         Write-Warn 'could not adjust ownership of schema public'
-        Write-Hint @('Continuing — this only matters if migrations later fail with a permission error.')
+        Write-Hint @('Continuing -- this only matters if migrations later fail with a permission error.')
     }
 }
 
 # ---------------------------------------------------------------------------
-# pgvector — attempted, never required.
+# pgvector -- attempted, never required.
 # ---------------------------------------------------------------------------
 Write-Step 'pgvector'
 $vectorAvailable = (Invoke-Psql -Database $target.Database -Tolerant `
@@ -308,12 +308,12 @@ if ($vectorInstalled) {
     Write-Host '  Vector search: real[] FALLBACK (pgvector not installed)' -ForegroundColor Yellow
     Write-Info 'This is a fully supported configuration. BrandLens stores every'
     Write-Info 'embedding in a portable real[] column and ranks with an in-SQL'
-    Write-Info 'cosine function, so nothing is disabled — precedent retrieval'
+    Write-Info 'cosine function, so nothing is disabled -- precedent retrieval'
     Write-Info 'does a sequential scan instead of an index scan.'
     Write-Info ''
     Write-Info 'Practical impact: negligible below ~50k embeddings per tenant;'
     Write-Info 'noticeable above ~250k. Add pgvector later and re-run'
-    Write-Info 'pnpm db:migrate — the vector column is backfilled by trigger.'
+    Write-Info 'pnpm db:migrate -- the vector column is backfilled by trigger.'
     Write-Info ''
     Write-Info 'To add it on Windows without a compiler:'
     Write-Info '  1. Download the prebuilt binaries matching your major version'
@@ -328,7 +328,7 @@ if ($vectorInstalled) {
 Write-Host ''
 
 # ---------------------------------------------------------------------------
-# Connectivity as the application role — catches pg_hba problems before the
+# Connectivity as the application role -- catches pg_hba problems before the
 # services do, where the failure looks like a mysterious boot loop.
 # ---------------------------------------------------------------------------
 Write-Step 'app role login'
@@ -363,7 +363,7 @@ if ($SkipMigrate) {
 # ---------------------------------------------------------------------------
 $pnpm = Get-PnpmCommand
 if (-not $pnpm) {
-    Write-Fail 'pnpm not found — cannot run migrations.'
+    Write-Fail 'pnpm not found -- cannot run migrations.'
     Write-Hint @('Run infra\windows\bootstrap.ps1 first, or:  corepack enable pnpm')
     exit 1
 }

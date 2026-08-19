@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Stops the BrandLens processes.
@@ -8,7 +8,7 @@
     start-all.ps1 (and the boot-time resurrect) bring them back unchanged.
 
     Stopping is graceful: PM2 sends SIGINT and waits for `kill_timeout` before
-    escalating. That matters — the API finishes in-flight synchronous checks
+    escalating. That matters -- the API finishes in-flight synchronous checks
     on shutdown, and the worker lets a running job complete rather than
     abandoning a paid VLM call halfway through.
 
@@ -42,7 +42,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 
-Write-Banner 'BrandLens · stop'
+Write-Banner 'BrandLens - stop'
 
 $pm2 = Assert-Pm2
 $root = Get-BrandLensRoot

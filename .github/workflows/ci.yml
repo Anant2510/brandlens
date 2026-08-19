@@ -315,11 +315,16 @@ jobs:
           & $py -m pytest -q -p no:warnings
           if ($LASTEXITCODE -ne 0) { throw 'engine tests failed' }
 
-      # The deployment scripts are PowerShell. A syntax error in deploy.ps1 is
-      # only discovered when someone runs it on the server, mid-deploy, which
-      # is the worst possible moment. Parsing them here is nearly free.
-      - name: PowerShell scripts parse
-        shell: pwsh
+      # The deployment scripts are PowerShell, and a syntax error in deploy.ps1
+      # is only discovered when someone runs it on the server, mid-deploy.
+      #
+      # CRITICAL: this uses `shell: powershell` -- Windows PowerShell 5.1 --
+      # NOT `pwsh` (7.x). They are different parsers with different DEFAULT FILE
+      # ENCODINGS, and 5.1 is what ships with Windows Server, so it is what the
+      # VM actually runs. Checking only with pwsh 7 let a real breakage through:
+      # see the encoding step below.
+      - name: PowerShell scripts parse (Windows PowerShell 5.1 -- as on the VM)
+        shell: powershell
         run: |
           $failed = $false
           Get-ChildItem infra/windows -Filter *.ps1 | ForEach-Object {
@@ -332,6 +337,55 @@ jobs:
             } else {
               Write-Host "ok  $($_.Name)"
             }
+          }
+          if ($failed) { exit 1 }
+
+      # Also parse under pwsh 7, so the scripts stay usable for anyone who has
+      # it installed. Both parsers must accept them.
+      - name: PowerShell scripts parse (pwsh 7)
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem infra/windows -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { Write-Host "::error::$($_.Name): $($errors[0].Message)"; $failed = $true }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "ok"
+
+      # The bug this exists to prevent, stated plainly:
+      #
+      # Windows PowerShell 5.1 decodes a .ps1 file with no byte-order mark as
+      # Windows-1252, not UTF-8. An em dash (U+2014, bytes E2 80 94) is then read
+      # as three characters, the last being 0x94 = U+201D, a RIGHT DOUBLE
+      # QUOTATION MARK -- and PowerShell accepts curly quotes as string
+      # delimiters. So one em dash in a comment injected a stray string
+      # terminator and the whole file failed to parse, with errors pointing at
+      # innocent lines hundreds of lines away.
+      #
+      # Two independent guarantees, because either alone would do but both is
+      # free: the files are pure ASCII (so UTF-8 and Windows-1252 decode
+      # identically and no mis-decode is possible), and they carry a BOM (so a
+      # non-ASCII character added later is still decoded correctly).
+      - name: PowerShell scripts are ASCII with a BOM
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem infra/windows -Filter *.ps1 | ForEach-Object {
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+            if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+              Write-Host "::error file=$($_.FullName)::missing UTF-8 BOM; Windows PowerShell 5.1 will decode this as Windows-1252"
+              $failed = $true
+            }
+            $high = 0
+            for ($i = 3; $i -lt $bytes.Length; $i++) { if ($bytes[$i] -gt 0x7F) { $high++ } }
+            if ($high -gt 0) {
+              Write-Host "::error file=$($_.FullName)::$high non-ASCII byte(s). Use ASCII in .ps1 -- an em dash becomes a smart quote under Windows-1252 and breaks parsing."
+              $failed = $true
+            }
+            if (-not $failed) { Write-Host "ok  $($_.Name)" }
           }
           if ($failed) { exit 1 }
 

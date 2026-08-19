@@ -1,5 +1,5 @@
-# ============================================================================
-# BrandLens · shared PowerShell helpers
+﻿# ============================================================================
+# BrandLens - shared PowerShell helpers
 #
 # Dot-sourced by every script in this folder:
 #     . (Join-Path $PSScriptRoot '_common.ps1')
@@ -96,7 +96,7 @@ function Write-Info {
 function Write-Hint {
     <#
     .SYNOPSIS
-        An indented, actionable next step. Used on every failure path — an
+        An indented, actionable next step. Used on every failure path -- an
         error the operator cannot act on is not an error message.
     #>
     param([string[]]$Lines)
@@ -109,7 +109,7 @@ function Write-TableBlock {
         Renders objects as a table. Works when there is no console.
     .DESCRIPTION
         `Format-Table -AutoSize | Out-String` silently produces an EMPTY string
-        when the host has no console width to measure — which is exactly the
+        when the host has no console width to measure -- which is exactly the
         case under a Windows scheduled task, a CI runner, or any redirected
         pipeline. Since healthcheck.ps1 and backup.ps1 are meant to be run from
         schtasks, that failure would make their most useful output vanish
@@ -153,7 +153,7 @@ function Get-CommandVersion {
     .SYNOPSIS
         Runs `<cmd> <args>` and returns the first version-looking token, or $null.
     .DESCRIPTION
-        Tolerates a missing command, a non-zero exit and stderr chatter — this
+        Tolerates a missing command, a non-zero exit and stderr chatter -- this
         is used for *detection*, where "not installed" is a normal answer.
     #>
     param(
@@ -200,7 +200,7 @@ function Update-SessionPath {
         Re-reads PATH from the registry into the current process.
     .DESCRIPTION
         winget installs a tool and updates the machine PATH, but the running
-        PowerShell process keeps its stale copy — which is why "I just
+        PowerShell process keeps its stale copy -- which is why "I just
         installed node and it says node is not recognised" is the single most
         common bootstrap complaint. Calling this after each install fixes it
         without asking the operator to open a new window.
@@ -355,7 +355,7 @@ function Invoke-Checked {
         Runs a native command and throws with the captured output on failure.
     .DESCRIPTION
         `$ErrorActionPreference = 'Stop'` does not apply to native executables
-        — a failing pnpm returns 1 and the script sails on. Every external call
+        -- a failing pnpm returns 1 and the script sails on. Every external call
         in these scripts goes through here so that cannot happen.
     #>
     param(

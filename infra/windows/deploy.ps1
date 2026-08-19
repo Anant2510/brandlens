@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Deploys the current main branch to this Windows VM.
@@ -16,7 +16,7 @@
 
     If the health check fails afterwards, the script rolls the CODE back to the
     previous commit automatically and rebuilds. It does NOT roll the database
-    back — see the warning under -SkipMigrate.
+    back -- see the warning under -SkipMigrate.
 
     Safe to re-run. If the VM is already on the target commit, it says so and
     does nothing unless -Force is passed.
@@ -32,7 +32,7 @@
     Do not run database migrations.
 
     Worth understanding: migrations here are FORWARD-ONLY. There is no
-    down-migration, by design — an automated rollback of a column drop is a
+    down-migration, by design -- an automated rollback of a column drop is a
     quiet way to lose data. If a migration turns out to be wrong, the recovery
     path is the backup this script takes, not an automatic reversal. That is
     why -SkipBackup and -SkipMigrate should rarely be used together.
@@ -94,7 +94,7 @@ function Invoke-CodeRollback {
         lose a column's data while appearing to recover. If the failure was
         schema-related, restore the dump taken at the start of the deploy.
 
-        A rollback that itself fails is reported loudly rather than swallowed —
+        A rollback that itself fails is reported loudly rather than swallowed --
         at that point the machine needs a person, and pretending otherwise
         wastes the minutes that matter.
     #>
@@ -124,10 +124,10 @@ function Invoke-CodeRollback {
     }
 }
 
-Write-Banner 'BrandLens · deploy'
+Write-Banner 'BrandLens - deploy'
 
 # ---------------------------------------------------------------------------
-# 1 — Preflight.
+# 1 -- Preflight.
 #
 # Every check here is one that, if skipped, produces a confusing failure
 # halfway through rather than a clear refusal at the start.
@@ -150,7 +150,7 @@ if (-not (Test-Path (Join-Path $root '.git'))) {
 $envPath = Join-Path $root '.env'
 if (-not (Test-Path $envPath)) {
     Write-Fail '.env is missing.'
-    Write-Hint 'This file is intentionally NOT in git — it holds this machine''s'
+    Write-Hint 'This file is intentionally NOT in git -- it holds this machine''s'
     Write-Hint 'secrets. Copy .env.example to .env and fill it in once; deploys'
     Write-Hint 'never overwrite it.'
     exit 1
@@ -181,7 +181,7 @@ $rollbackSha = $currentSha
 Write-Info ('Currently deployed  {0}' -f $currentSha.Substring(0, 12))
 
 # ---------------------------------------------------------------------------
-# 2 — Fetch and show what is about to change.
+# 2 -- Fetch and show what is about to change.
 # ---------------------------------------------------------------------------
 Write-Step 'Fetching from origin'
 Invoke-Checked -FilePath $git -ArgumentList @('-C', $root, 'fetch', 'origin', '--prune') -Context 'git fetch'
@@ -218,10 +218,10 @@ $pyChanged = $changedFiles -match '^apps/engine/requirements\.txt$'
 $migrationsChanged = $changedFiles -match '^packages/db/drizzle/'
 
 if (-not $PSCmdlet.ShouldProcess("origin/$Branch ($($targetSha.Substring(0,12)))", 'Deploy to this VM')) {
-    Write-Info 'WhatIf — planned actions:'
+    Write-Info 'WhatIf -- planned actions:'
     Write-Host ('    git pull --ff-only origin {0}' -f $Branch) -ForegroundColor Gray
     if ($lockChanged) { Write-Host '    pnpm install --frozen-lockfile   (dependencies changed)' -ForegroundColor Gray }
-    else { Write-Host '    pnpm install --frozen-lockfile   (skipped — no dependency change)' -ForegroundColor Gray }
+    else { Write-Host '    pnpm install --frozen-lockfile   (skipped -- no dependency change)' -ForegroundColor Gray }
     Write-Host '    pnpm build' -ForegroundColor Gray
     if ($pyChanged) { Write-Host '    pip install -r requirements.txt  (requirements changed)' -ForegroundColor Gray }
     if (-not $SkipBackup) { Write-Host '    backup.ps1' -ForegroundColor Gray }
@@ -236,7 +236,7 @@ if (-not $PSCmdlet.ShouldProcess("origin/$Branch ($($targetSha.Substring(0,12)))
 Write-DeployLog ("START  {0} -> {1}  branch={2}" -f $currentSha.Substring(0,12), $targetSha.Substring(0,12), $Branch)
 
 # ---------------------------------------------------------------------------
-# 3 — Back up BEFORE migrating.
+# 3 -- Back up BEFORE migrating.
 #
 # Deliberately before the pull as well: if the deploy fails at any later step,
 # the dump on disk matches the schema that is still running.
@@ -245,7 +245,7 @@ if (-not $SkipBackup -and -not $SkipMigrate) {
     Write-Step 'Backing up the database'
     try {
         # No -Quiet here: backup.ps1 does not take one, and its output is worth
-        # seeing in the deploy log anyway — it reports whether the RLS bypass
+        # seeing in the deploy log anyway -- it reports whether the RLS bypass
         # was confirmed, which decides whether the dump is complete.
         & (Join-Path $PSScriptRoot 'backup.ps1')
         Write-Ok 'Backup written'
@@ -261,7 +261,7 @@ if (-not $SkipBackup -and -not $SkipMigrate) {
 }
 
 # ---------------------------------------------------------------------------
-# 4 — Pull.
+# 4 -- Pull.
 #
 # --ff-only, never a merge. If the server's history has diverged from origin,
 # something is wrong that a merge commit would only hide.
@@ -280,7 +280,7 @@ try {
 }
 
 # ---------------------------------------------------------------------------
-# 5 — Build the new version while the old one is still serving.
+# 5 -- Build the new version while the old one is still serving.
 # ---------------------------------------------------------------------------
 try {
     if ($lockChanged -or $Force) {
@@ -289,7 +289,7 @@ try {
             -WorkingDirectory $root -Context 'pnpm install'
         Write-Ok 'Dependencies installed'
     } else {
-        Write-Skip 'pnpm install — no dependency change in this deploy'
+        Write-Skip 'pnpm install -- no dependency change in this deploy'
     }
 
     if ($pyChanged -and -not $SkipPython) {
@@ -304,7 +304,7 @@ try {
         }
         Write-Ok 'Engine dependencies updated'
     } elseif (-not $SkipPython) {
-        Write-Skip 'Engine virtualenv — requirements.txt unchanged'
+        Write-Skip 'Engine virtualenv -- requirements.txt unchanged'
     }
 
     Write-Step 'Building'
@@ -312,7 +312,7 @@ try {
     Write-Ok 'Build complete'
 } catch {
     Write-Fail ('Build failed: {0}' -f $_.Exception.Message)
-    Write-Hint 'The previous version is still running — nothing was reloaded.'
+    Write-Hint 'The previous version is still running -- nothing was reloaded.'
     Write-Hint 'This should have been caught by CI. Check the Actions tab.'
     Write-DeployLog 'ABORT  build failed (old version still serving)'
     if (-not $NoRollback) { Invoke-CodeRollback -Git $git -Root $root -Sha $rollbackSha -Pnpm $pnpm }
@@ -320,9 +320,9 @@ try {
 }
 
 # ---------------------------------------------------------------------------
-# 6 — Migrate.
+# 6 -- Migrate.
 #
-# Only ever `db:migrate`. Never `db:generate` — the SQL that runs here is the
+# Only ever `db:migrate`. Never `db:generate` -- the SQL that runs here is the
 # SQL that was reviewed in the pull request, not something invented on the
 # server against production data.
 # ---------------------------------------------------------------------------
@@ -336,20 +336,20 @@ if (-not $SkipMigrate) {
         } catch {
             Write-Fail ('Migration failed: {0}' -f $_.Exception.Message)
             Write-Hint 'The database may be partially migrated. The backup taken at the'
-            Write-Hint 'start of this deploy is in the backups\ folder — restore from it'
+            Write-Hint 'start of this deploy is in the backups\ folder -- restore from it'
             Write-Hint 'before retrying. See docs/operations.md.'
             Write-DeployLog 'ABORT  migration failed'
             exit 1
         }
     } else {
-        Write-Skip 'Migrations — none new in this deploy'
+        Write-Skip 'Migrations -- none new in this deploy'
     }
 } else {
     Write-Skip 'Migrations (-SkipMigrate)'
 }
 
 # ---------------------------------------------------------------------------
-# 7 — Reload.
+# 7 -- Reload.
 #
 # `pm2 reload` rather than `restart`: reload waits for the new process to come
 # up before retiring the old one, so an in-flight check is not dropped.
@@ -367,7 +367,7 @@ try {
 }
 
 # ---------------------------------------------------------------------------
-# 8 — Verify, and roll the code back if it did not come up.
+# 8 -- Verify, and roll the code back if it did not come up.
 # ---------------------------------------------------------------------------
 Write-Step 'Verifying'
 Start-Sleep -Seconds 6

@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Backs up the BrandLens database and object storage, with retention.
@@ -6,11 +6,11 @@
 .DESCRIPTION
     A BrandLens install has exactly two pieces of durable state:
 
-      1. PostgreSQL — the ontology, every check run, every decision trace and
+      1. PostgreSQL -- the ontology, every check run, every decision trace and
          the audit log. Dumped with pg_dump in the custom format (-Fc), which
          is compressed, parallel-restorable and selectively restorable.
 
-      2. STORAGE_LOCAL_ROOT — the original asset bytes and derivatives. Because
+      2. STORAGE_LOCAL_ROOT -- the original asset bytes and derivatives. Because
          storage is content-addressed (originals/<org>/<ab>/<sha256>.<ext>),
          files are immutable once written, so a copy that skips existing
          destination files is both correct and fast.
@@ -50,7 +50,7 @@
 .PARAMETER DumpUser
     Dump as this role instead of the application role. Use a SUPERUSER (e.g.
     `postgres`) when you would rather not rely on the app.bypass_rls escape
-    hatch — a superuser bypasses row-level security natively.
+    hatch -- a superuser bypasses row-level security natively.
 
 .PARAMETER DumpPassword
     Password for -DumpUser. Prompted for if omitted.
@@ -97,7 +97,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 
-Write-Banner 'BrandLens · backup'
+Write-Banner 'BrandLens - backup'
 
 $root = Get-BrandLensRoot
 if (-not $Destination) { $Destination = Join-Path $root 'backups' }
@@ -144,7 +144,7 @@ if ($PSCmdlet.ShouldProcess($backupDir, 'create backup directory')) {
 $failed = $false
 
 # ===========================================================================
-# 1 — database
+# 1 -- database
 # ===========================================================================
 if (-not $SkipDatabase) {
     Write-Step 'pg_dump'
@@ -270,7 +270,7 @@ Fix one of these and re-run:
                 }
 
                 # Record schema facts so a restore is verifiable. Failure here
-                # must not fail the backup — the dump is already on disk.
+                # must not fail the backup -- the dump is already on disk.
                 $psql = Get-PsqlPath
                 if ($psql) {
                     $previous = $env:PGPASSWORD
@@ -323,12 +323,12 @@ SELECT
 }
 
 # ===========================================================================
-# 2 — storage
+# 2 -- storage
 # ===========================================================================
 if (-not $SkipStorage) {
     Write-Step 'storage'
     if ($storageDriver -ne 'local') {
-        Write-Skip "driver is '$storageDriver' — back it up with the provider's own tooling"
+        Write-Skip "driver is '$storageDriver' -- back it up with the provider's own tooling"
         $manifest.storage = @{ skipped = "driver=$storageDriver" }
     } elseif (-not (Test-Path $storageRoot)) {
         Write-Warn "no storage directory at $storageRoot (nothing uploaded yet)"
@@ -371,7 +371,7 @@ if (-not $SkipStorage) {
 }
 
 # ===========================================================================
-# 3 — manifest
+# 3 -- manifest
 # ===========================================================================
 if ($PSCmdlet.ShouldProcess('manifest.json', 'write')) {
     $manifestPath = Join-Path $backupDir 'manifest.json'
@@ -381,7 +381,7 @@ if ($PSCmdlet.ShouldProcess('manifest.json', 'write')) {
 }
 
 # ===========================================================================
-# 4 — optional zip
+# 4 -- optional zip
 # ===========================================================================
 if ($Compress -and $PSCmdlet.ShouldProcess($backupDir, 'compress to .zip')) {
     Write-Step 'compress'
@@ -396,7 +396,7 @@ if ($Compress -and $PSCmdlet.ShouldProcess($backupDir, 'compress to .zip')) {
 }
 
 # ===========================================================================
-# 5 — retention
+# 5 -- retention
 #
 # Prune only AFTER a successful backup, and never below MinimumKeep. Deleting
 # yesterday's good backup because today's failed is the classic way to have no
@@ -427,7 +427,7 @@ if ($RetentionDays -gt 0 -and -not $failed) {
     }
 } elseif ($failed) {
     Write-Step 'retention'
-    Write-Skip 'skipped — this backup did not complete cleanly'
+    Write-Skip 'skipped -- this backup did not complete cleanly'
 }
 
 # ===========================================================================
@@ -443,9 +443,9 @@ if (Test-Path $backupDir) {
     $totalSize = (Get-ChildItem -LiteralPath $backupDir -Recurse -File |
             Measure-Object -Property Length -Sum).Sum
 }
-Write-Host ("  Backup complete — {0} ({1:N1} MB)" -f $backupDir, ($totalSize / 1MB)) -ForegroundColor Green
+Write-Host ("  Backup complete -- {0} ({1:N1} MB)" -f $backupDir, ($totalSize / 1MB)) -ForegroundColor Green
 Write-Host ''
-Write-Host '  Restore (drill this quarterly — see docs\operations.md):' -ForegroundColor Cyan
+Write-Host '  Restore (drill this quarterly -- see docs\operations.md):' -ForegroundColor Cyan
 Write-Host "    pg_restore --clean --if-exists --no-owner -d brandlens `"$backupDir\brandlens-$stamp.dump`""
 Write-Host "    Copy-Item `"$backupDir\storage\*`" `"$storageRoot`" -Recurse -Force"
 Write-Host ''

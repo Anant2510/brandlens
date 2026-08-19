@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
@@ -69,7 +69,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 
-Write-Banner 'BrandLens · install Windows service'
+Write-Banner 'BrandLens - install Windows service'
 
 $root = Get-BrandLensRoot
 $ecosystem = Get-EcosystemPath
@@ -101,7 +101,7 @@ Write-Ok $nodeExe
 
 Write-Step '.env'
 if (-not (Test-Path (Join-Path $root '.env'))) {
-    Write-Fail '.env is missing — the service would start with no configuration.'
+    Write-Fail '.env is missing -- the service would start with no configuration.'
     Write-Hint @('Copy .env.example to .env and set the secrets, then re-run.')
     exit 1
 }
@@ -163,7 +163,7 @@ if ($existing.Count -gt 0) {
             Write-Info $_.Exception.Message
         }
         Invoke-Checked -FilePath $pm2 -ArgumentList @('save') -WorkingDirectory $root -Context 'pm2 save'
-        Write-Ok 'process list saved — it will be resurrected at boot'
+        Write-Ok 'process list saved -- it will be resurrected at boot'
     }
 
     Write-Host ''
