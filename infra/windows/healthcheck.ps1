@@ -178,16 +178,25 @@ if ($api.Ok) {
     $deep = Test-HttpEndpoint -Url "$apiUrl/health/deep" -TimeoutSeconds ($TimeoutSeconds * 2)
     if ($deep.Ok) {
         try {
-            $body = $deep.Body | ConvertFrom-Json
+            # /health/deep carries 40 analyzer descriptors, which can exceed
+            # ConvertFrom-Json's inherited MaxJsonLength on PS 5.1.
+            $body = ConvertFrom-JsonSafe $deep.Body
+            if ($null -eq $body) { throw 'response was not parseable JSON' }
+            $components = Get-JsonValue $body 'components'
+            if ($null -eq $components) { throw 'response had no components object' }
+
             $bad = @()
-            foreach ($prop in $body.components.PSObject.Properties) {
-                if (-not $prop.Value.ok) { $bad += $prop.Name }
+            foreach ($name in @($components.Keys)) {
+                $value = $components[$name]
+                $componentOk = [bool](Get-JsonValue $value 'ok')
+                if (-not $componentOk) { $bad += $name }
+                $rawDetail = Get-JsonValue $value 'detail'
                 $deepDetails += [pscustomobject]@{
-                    Component = "  - $($prop.Name)"
-                    Status    = if ($prop.Value.ok) { 'OK' } else { 'FAIL' }
-                    LatencyMs = [int]($prop.Value.latencyMs)
-                    Detail    = ($prop.Value.detail | ConvertTo-Json -Compress -Depth 3)
-                    Ok        = [bool]$prop.Value.ok
+                    Component = "  - $name"
+                    Status    = if ($componentOk) { 'OK' } else { 'FAIL' }
+                    LatencyMs = [int](Get-JsonValue $value 'latencyMs')
+                    Detail    = if ($null -eq $rawDetail) { '' } else { ($rawDetail | ConvertTo-Json -Compress -Depth 4) }
+                    Ok        = $componentOk
                     Required  = $true
                 }
             }
@@ -228,16 +237,26 @@ if (-not $SkipWeb) {
 $pm2 = Get-Pm2Command
 if ($pm2) {
     try {
-        $list = (& $pm2 jlist 2>&1 | Out-String) | ConvertFrom-Json
+        # ConvertFrom-JsonSafe, not ConvertFrom-Json: pm2_env embeds the Windows
+        # environment block, which contains both 'username' and 'USERNAME'.
+        # The built-in cmdlet folds keys case-insensitively and throws on them.
+        $list = ConvertFrom-JsonSafe ((& $pm2 jlist 2>&1 | Out-String))
+        if ($null -eq $list) { throw 'pm2 jlist returned no parseable JSON' }
+
         $expected = if ($SkipWeb) { $BrandLensProcesses | Where-Object { $_ -ne 'brandlens-web' } } else { $BrandLensProcesses }
         $offline = @()
-        foreach ($name in $expected) {
-            $proc = $list | Where-Object { $_.name -eq $name } | Select-Object -First 1
-            if (-not $proc) { $offline += "$name (absent)" }
-            elseif ($proc.pm2_env.status -ne 'online') { $offline += "$name ($($proc.pm2_env.status))" }
+        $flapping = @()
+        foreach ($proc in $list) {
+            $procName = Get-JsonValue $proc 'name'
+            $restarts = Get-JsonValue $proc 'pm2_env' 'restart_time'
+            if ($restarts -ge 5) { $flapping += "$procName x$restarts" }
         }
-        $flapping = @($list | Where-Object { $_.pm2_env.restart_time -ge 5 } |
-                ForEach-Object { "$($_.name) x$($_.pm2_env.restart_time)" })
+        foreach ($name in $expected) {
+            $proc = $list | Where-Object { (Get-JsonValue $_ 'name') -eq $name } | Select-Object -First 1
+            if (-not $proc) { $offline += "$name (absent)"; continue }
+            $procStatus = Get-JsonValue $proc 'pm2_env' 'status'
+            if ($procStatus -ne 'online') { $offline += "$name ($procStatus)" }
+        }
         $detail = if ($offline.Count) { $offline -join ', ' } else { "$($expected.Count) online" }
         if ($flapping.Count) { $detail += "; restarts: $($flapping -join ', ')" }
         Add-Check -Component 'pm2' -Ok ($offline.Count -eq 0) -Detail $detail

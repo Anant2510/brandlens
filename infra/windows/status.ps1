@@ -49,20 +49,29 @@ if ($pm2) {
     # `pm2 jlist` is the stable machine interface; the pretty table is not.
     $raw = & $pm2 jlist 2>&1 | Out-String
     try {
-        $parsed = $raw | ConvertFrom-Json
+        # Case-sensitive parser: pm2_env carries the Windows environment block,
+        # where 'username' and 'USERNAME' both appear and ConvertFrom-Json
+        # rejects them as duplicates.
+        $parsed = ConvertFrom-JsonSafe $raw
+        if ($null -eq $parsed) { throw 'pm2 jlist returned no parseable JSON' }
+        # Dictionary indexing, not dot-access: ConvertFrom-JsonSafe returns
+        # Dictionary<string,object> so that key comparison stays case-sensitive.
         foreach ($proc in $parsed) {
+            $procStatus = Get-JsonValue $proc 'pm2_env' 'status'
+            $uptimeMs   = Get-JsonValue $proc 'pm2_env' 'pm_uptime'
+            $memBytes   = Get-JsonValue $proc 'monit' 'memory'
             $processes += [pscustomobject]@{
-                Name      = $proc.name
-                Status    = $proc.pm2_env.status
-                PID       = $proc.pid
-                Restarts  = $proc.pm2_env.restart_time
-                Uptime    = if ($proc.pm2_env.status -eq 'online' -and $proc.pm2_env.pm_uptime) {
-                    $span = (Get-Date) - ([DateTimeOffset]::FromUnixTimeMilliseconds([int64]$proc.pm2_env.pm_uptime)).LocalDateTime
+                Name      = Get-JsonValue $proc 'name'
+                Status    = $procStatus
+                PID       = Get-JsonValue $proc 'pid'
+                Restarts  = Get-JsonValue $proc 'pm2_env' 'restart_time'
+                Uptime    = if ($procStatus -eq 'online' -and $uptimeMs) {
+                    $span = (Get-Date) - ([DateTimeOffset]::FromUnixTimeMilliseconds([int64]$uptimeMs)).LocalDateTime
                     '{0}d {1:00}h {2:00}m' -f [int]$span.TotalDays, $span.Hours, $span.Minutes
                 } else { '-' }
-                MemoryMB  = if ($proc.monit.memory) { [math]::Round($proc.monit.memory / 1MB, 1) } else { 0 }
-                CPU       = $proc.monit.cpu
-                Instances = $proc.pm2_env.instances
+                MemoryMB  = if ($memBytes) { [math]::Round([double]$memBytes / 1MB, 1) } else { 0 }
+                CPU       = Get-JsonValue $proc 'monit' 'cpu'
+                Instances = Get-JsonValue $proc 'pm2_env' 'instances'
             }
         }
     } catch {

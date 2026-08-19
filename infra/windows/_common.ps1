@@ -349,6 +349,87 @@ function Test-TcpPort {
 # External processes
 # ---------------------------------------------------------------------------
 
+function ConvertFrom-JsonSafe {
+    <#
+    .SYNOPSIS
+        Parses JSON without the two ways ConvertFrom-Json fails on Windows.
+    .DESCRIPTION
+        Windows PowerShell 5.1's ConvertFrom-Json breaks on payloads this
+        project produces every day:
+
+          * DUPLICATE KEYS DIFFERING ONLY IN CASE. The cmdlet folds keys
+            case-insensitively, so a Windows environment block containing both
+            'username' and 'USERNAME' -- which is exactly what `pm2 jlist`
+            embeds under pm2_env -- throws
+            "contains the duplicated keys 'username' and 'USERNAME'".
+
+          * LARGE PAYLOADS. It inherits JavaScriptSerializer's default
+            MaxJsonLength, and /health/deep carries 40 analyzer descriptors.
+
+        JavaScriptSerializer.DeserializeObject compares keys ordinally and
+        takes a configurable length limit, so it survives both. It returns
+        Dictionary<string,object> and object[] rather than PSCustomObject, so
+        callers index with ['key'] instead of .key -- a deliberate trade:
+        dictionary lookups are case-sensitive, which is the whole point.
+
+        Returns $null on unparseable input rather than throwing, so a health
+        check reports a bad payload instead of dying on it.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string]$Json)
+
+    if ([string]::IsNullOrWhiteSpace($Json)) { return $null }
+
+    # Path 1 -- Windows PowerShell 5.1, which is what the VM runs.
+    # System.Web.Extensions ships with .NET Framework only; it is absent on
+    # .NET Core, so this silently declines on pwsh 7 and Linux.
+    try {
+        Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
+        $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        $serializer.MaxJsonLength = [int]::MaxValue
+        $serializer.RecursionLimit = 256
+        return $serializer.DeserializeObject($Json)
+    } catch { }
+
+    # Path 2 -- PowerShell 6+. -AsHashtable is precisely what the built-in
+    # error message recommends for case-clashing keys, and it returns
+    # IDictionary, so Get-JsonValue indexes it the same way.
+    try {
+        return $Json | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    } catch { }
+
+    # Path 3 -- last resort. Fails on case-clashing keys, which is why it is
+    # last, but it is better than returning nothing for ordinary payloads.
+    try {
+        return $Json | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return $null
+    }
+}
+
+function Get-JsonValue {
+    <#
+    .SYNOPSIS
+        Safe nested lookup into a ConvertFrom-JsonSafe result.
+    .EXAMPLE
+        Get-JsonValue $parsed 'components' 'engine' 'ok'
+    #>
+    param(
+        [Parameter(Mandatory, Position = 0)][AllowNull()]$Object,
+        [Parameter(ValueFromRemainingArguments)][string[]]$Path
+    )
+    $current = $Object
+    foreach ($key in $Path) {
+        if ($null -eq $current) { return $null }
+        if ($current -is [System.Collections.IDictionary]) {
+            if (-not $current.Contains($key)) { return $null }
+            $current = $current[$key]
+        } else {
+            return $null
+        }
+    }
+    return $current
+}
+
 function Invoke-Checked {
     <#
     .SYNOPSIS
