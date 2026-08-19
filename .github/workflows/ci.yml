@@ -193,13 +193,20 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: apps/engine/requirements.txt
+          cache-dependency-path: |
+            apps/engine/requirements.txt
+            apps/engine/requirements-dev.txt
 
+      # requirements-dev.txt starts with `-r requirements.txt`, so this single
+      # command installs runtime AND test dependencies. Installing only the
+      # runtime file leaves pytest missing, which fails as `No module named
+      # pytest` — a message that reads like a broken runner rather than a
+      # missing declaration.
       - name: Install
         working-directory: apps/engine
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
       - name: Tests
         working-directory: apps/engine
@@ -269,13 +276,31 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # Mirrors setup-python.ps1 on the VM: a real virtualenv at
+      # apps\engine\.venv, populated from the same requirements files.
+      #
+      # $ErrorActionPreference does not apply to native executables, and this
+      # step's exit code is taken from the LAST command only — so a failed pip
+      # would otherwise sail on and surface as a confusing pytest error. Each
+      # call checks $LASTEXITCODE explicitly.
       - name: Engine install + tests
         working-directory: apps/engine
+        shell: pwsh
         run: |
           python -m venv .venv
-          .venv\Scripts\python.exe -m pip install --upgrade pip
-          .venv\Scripts\python.exe -m pip install -r requirements.txt
-          .venv\Scripts\python.exe -m pytest -q -p no:warnings
+          if ($LASTEXITCODE -ne 0) { throw 'venv creation failed' }
+
+          $py = '.venv\Scripts\python.exe'
+          if (-not (Test-Path $py)) { throw "interpreter missing at $py" }
+
+          & $py -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw 'pip upgrade failed' }
+
+          & $py -m pip install -r requirements-dev.txt
+          if ($LASTEXITCODE -ne 0) { throw 'dependency install failed' }
+
+          & $py -m pytest -q -p no:warnings
+          if ($LASTEXITCODE -ne 0) { throw 'engine tests failed' }
 
       # The deployment scripts are PowerShell. A syntax error in deploy.ps1 is
       # only discovered when someone runs it on the server, mid-deploy, which
