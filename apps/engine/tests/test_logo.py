@@ -230,6 +230,84 @@ def test_clearspace_passes_on_an_isolated_logo(context_for, poster_path):
     assert set(result.evidence.measured["clearanceNorm"]) == {"left", "right", "top", "bottom"}
 
 
+def test_clearspace_verdict_is_stable_under_detector_jitter(context_for, poster_path, monkeypatch):
+    """The verdict must not depend on sub-pixel detector output.
+
+    Regression test for a real defect. `clearanceNorm` was rounded to 5 decimal
+    places and then compared against an unrounded threshold with a 1e-6
+    epsilon — but rounding to 5dp perturbs a value by up to 5e-6, five times
+    the epsilon. For a fully-clear side, whose true clearance equals the
+    requirement exactly, the verdict was therefore decided by the 5th decimal
+    place. Feature matching is not bit-identical across platforms, so the same
+    artwork passed on Linux and failed on Windows, and CI caught the two
+    disagreeing.
+
+    Scaling the detected box +/-10% stands in for that platform jitter. An
+    isolated logo is compliant at every one of those scales; if this test ever
+    reports a mix of verdicts, precision has leaked back into the comparison.
+    """
+    import copy
+
+    import brandlens_engine.logo as logo_module
+
+    rule = make_rule(
+        "logo.clearspace", "logo.clearspace", "logo", tier="cv", params={"clearSpaceMultiple": 0.25}
+    )
+    ctx = context_for(poster_path)
+    baseline = logo_module._best_detection(ctx, rule)
+    x0, y0, x1, y1 = baseline.bbox
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+
+    verdicts = {}
+    for pct in range(-10, 11, 2):
+        factor = 1 + pct / 100
+        w, h = (x1 - x0) * factor, (y1 - y0) * factor
+        jittered = copy.copy(baseline)
+        jittered.bbox = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+        monkeypatch.setattr(logo_module, "_best_detection", lambda c, r, _d=jittered: _d)
+        verdicts[pct] = check_clearspace(ctx, rule).verdict
+
+    assert set(verdicts.values()) == {"pass"}, (
+        "clear-space verdict changed with detector jitter, so it depends on "
+        f"sub-pixel noise rather than on the artwork: {verdicts}"
+    )
+
+
+def test_clearspace_ignores_the_logos_own_antialiased_edge(context_for, poster_path, monkeypatch):
+    """A box slightly smaller than the mark must not fail on the mark itself.
+
+    The measurement blanks the detected box before scanning the surroundings.
+    When the detector under-estimates by a pixel or two, the logo's own
+    antialiased border survives that blanking and is measured as an intruder
+    into its own exclusion zone — clearance collapses to zero on all four sides
+    and compliant artwork fails, citing "content" that is the logo.
+    """
+    import copy
+
+    import brandlens_engine.logo as logo_module
+
+    rule = make_rule(
+        "logo.clearspace", "logo.clearspace", "logo", tier="cv", params={"clearSpaceMultiple": 0.25}
+    )
+    ctx = context_for(poster_path)
+    baseline = logo_module._best_detection(ctx, rule)
+    x0, y0, x1, y1 = baseline.bbox
+
+    # Shrink the box by 4% so the mark's outer pixels fall outside it.
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    w, h = (x1 - x0) * 0.96, (y1 - y0) * 0.96
+    undersized = copy.copy(baseline)
+    undersized.bbox = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+    monkeypatch.setattr(logo_module, "_best_detection", lambda c, r, _d=undersized: _d)
+
+    result = check_clearspace(ctx, rule)
+    clearances = result.evidence.measured["clearanceNorm"]
+    assert result.verdict == "pass", (
+        "the logo's own edge was counted as an intruder: " f"{clearances}"
+    )
+    assert all(v > 0 for v in clearances.values()), clearances
+
+
 def test_clearspace_fails_when_content_crowds_the_logo(context_for, scratch, logo_path):
     poster = make_poster(logo=Image.open(logo_path))
     ImageDraw.Draw(poster).rectangle([172, 72, 400, 192], fill="#111111")

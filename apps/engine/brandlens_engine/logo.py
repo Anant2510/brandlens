@@ -486,6 +486,32 @@ def check_presence(ctx: AnalysisContext, rule: RuleDefinition) -> CriterionResul
 # ---------------------------------------------------------------------------
 # logo.clearspace
 # ---------------------------------------------------------------------------
+def _label_components(mask: NDArray[np.bool_]) -> tuple[NDArray[np.int32], int]:
+    """Connected-component labels for a boolean ink mask.
+
+    OpenCV is the fast path and is already a hard dependency; SciPy is the
+    fallback so this keeps working if the headless OpenCV wheel is ever swapped
+    for a build without `connectedComponents`. Both are 8-connected, which
+    matters: 4-connectivity treats a diagonal antialiased staircase as separate
+    components and would defeat the majority test in clearspace_measure.
+    """
+    try:
+        import cv2
+
+        count, labels = cv2.connectedComponents(mask.astype(np.uint8), connectivity=8)
+        # OpenCV counts the background as label 0, so subtract it.
+        return labels.astype(np.int32), max(0, count - 1)
+    except Exception:  # pragma: no cover - exercised only without OpenCV
+        try:
+            from scipy import ndimage
+
+            structure = np.ones((3, 3), dtype=bool)  # 8-connected
+            labels, count = ndimage.label(mask, structure=structure)
+            return labels.astype(np.int32), int(count)
+        except Exception:
+            return np.zeros(mask.shape, dtype=np.int32), 0
+
+
 def clearspace_measure(
     rgb: NDArray[np.uint8],
     logo_bbox: tuple[float, float, float, float],
@@ -508,8 +534,45 @@ def clearspace_measure(
     y1 = int(math.ceil(logo_bbox[3] * h))
 
     # The logo is itself ink; blank it so we measure the surroundings only.
+    #
+    # Blanking ONLY the detected rectangle is not enough, and the failure it
+    # causes is the worst kind this product can produce. The box comes from
+    # feature matching and is an estimate accurate to a pixel or two, while a
+    # mark's antialiased edge extends past any tight box. Whatever spills over
+    # stays in `probe` and is then measured as an intruder into the logo's own
+    # exclusion zone: clearance collapses to zero on all four sides and a
+    # perfectly compliant asset fails, with the evidence blaming "content" that
+    # is the logo itself. Because the spill depends on sub-pixel detector
+    # output, the same artwork could pass on one machine and fail on another —
+    # this was caught by CI disagreeing between Linux and Windows.
+    #
+    # Fix: also remove ink components that are *predominantly inside* the
+    # detected box. A component that is mostly inside the box is the mark; one
+    # that merely touches it is a separate object and must still be caught, so
+    # the majority test is what keeps a real intruder — or a dark background
+    # bleeding in — from being erased along with the logo.
     probe = mask.copy()
-    probe[max(0, y0) : min(h, y1), max(0, x0) : min(w, x1)] = False
+    bx0, by0 = max(0, x0), max(0, y0)
+    bx1, by1 = min(w, x1), min(h, y1)
+    probe[by0:by1, bx0:bx1] = False
+
+    if bx1 > bx0 and by1 > by0:
+        labels, count = _label_components(mask)
+        if count:
+            inside = labels[by0:by1, bx0:bx1]
+            for label in np.unique(inside):
+                if label == 0:
+                    continue
+                component = labels == label
+                total = int(component.sum())
+                if total == 0:
+                    continue
+                within = int((inside == label).sum())
+                # 0.6 rather than 0.5: a logo whose edge spills a few pixels is
+                # ~99% inside, while a headline clipped by the box corner is
+                # mostly outside. Nothing realistic sits near the boundary.
+                if within / total >= 0.6:
+                    probe[component] = False
 
     # Ceil, not round: a band one pixel short of the requirement would report a
     # fully-clear zone as marginally non-compliant.
@@ -558,7 +621,19 @@ def clearspace_measure(
             return required_norm_y if band.shape[0] >= req_y else float(band.shape[0]) / h
         return float(int(rows.min())) / h
 
-    clearances = {side: max(0.0, round(_scan(side), 5)) for side in ("left", "right", "top", "bottom")}
+    # Rounded for display ONLY. Rounding to 5 decimals moves a value by up to
+    # 5e-6, and the compliance comparison in check_clearspace uses a 1e-6
+    # epsilon — five times smaller than the noise the rounding introduces. A
+    # fully-clear side, whose true clearance equals the requirement exactly,
+    # therefore passed or failed on the 5th decimal place: the same artwork
+    # gave opposite verdicts depending on sub-pixel detector output, which is
+    # how this surfaced as a Linux/Windows CI disagreement.
+    #
+    # `clearanceNorm` stays rounded because it is rendered in the UI and
+    # exported in audit reports, where 17 significant figures are noise.
+    # `clearanceNormExact` is what the verdict is computed from.
+    exact = {side: max(0.0, _scan(side)) for side in ("left", "right", "top", "bottom")}
+    clearances = {side: round(value, 5) for side, value in exact.items()}
 
     # Corroborating statistics over the annulus as a whole.
     ax0, ay0 = max(0, x0 - req_x), max(0, y0 - req_y)
@@ -593,6 +668,8 @@ def clearspace_measure(
 
     return {
         "clearanceNorm": clearances,
+        # Full precision, for the verdict. Never render this.
+        "clearanceNormExact": exact,
         "annulusEdgeDensity": round(edge_density, 5),
         "annulusLabVariance": round(lab_variance, 3),
         "textIntrusions": text_intrusions[:10],
@@ -624,10 +701,22 @@ def check_clearspace(ctx: AnalysisContext, rule: RuleDefinition) -> CriterionRes
         img.rgb, det.bbox, req_x, req_y, [s.bbox for s in ctx.text_spans()]
     )
     clearances = measurement["clearanceNorm"]
+    # The verdict is computed from the unrounded values, and the display copy is
+    # dropped from the payload so it cannot be mistaken for the measurement.
+    exact = measurement.pop("clearanceNormExact", clearances)
+
+    # The scan counts whole pixels, so it cannot resolve a difference finer than
+    # one pixel; the requirement is a continuous float derived from the detected
+    # box. Comparing the two without a one-pixel tolerance asks the measurement
+    # for precision it does not have, and the answer is decided by rounding
+    # rather than by the artwork. One pixel is the physical resolution limit —
+    # a real clear-space violation is short by tens of pixels, never by one.
+    tol_x = 1.0 / max(img.width, 1)
+    tol_y = 1.0 / max(img.height, 1)
     violations = {
-        side: value
-        for side, value in clearances.items()
-        if value + 1e-6 < (req_x if side in ("left", "right") else req_y)
+        side: clearances[side]
+        for side, value in exact.items()
+        if value < (req_x - tol_x if side in ("left", "right") else req_y - tol_y)
     }
 
     measured = {
