@@ -354,9 +354,22 @@ function Invoke-Checked {
     .SYNOPSIS
         Runs a native command and throws with the captured output on failure.
     .DESCRIPTION
-        `$ErrorActionPreference = 'Stop'` does not apply to native executables
-        -- a failing pnpm returns 1 and the script sails on. Every external call
-        in these scripts goes through here so that cannot happen.
+        `$ErrorActionPreference = 'Stop'` does not stop a native executable that
+        returns a non-zero EXIT CODE -- a failing pnpm returns 1 and the script
+        sails on. Every external call goes through here so that cannot happen.
+
+        The opposite trap is worse, and it bit us on a real VM. With
+        `$ErrorActionPreference = 'Stop'` in force, `2>&1` turns anything a
+        native command writes to STDERR into a terminating NativeCommandError,
+        regardless of its exit code. npm writes `npm notice` to stderr on a
+        perfectly successful install; Node writes DeprecationWarnings there too.
+        Both were reported as fatal, so bootstrap.ps1 declared PM2 and
+        `pnpm install` failed when both had in fact succeeded -- and the "error"
+        shown to the operator was a harmless notice, which is about as
+        misleading as a failure message can be.
+
+        Success is therefore judged by EXIT CODE ONLY. stderr is captured for
+        the message and is never, by itself, treated as failure.
     #>
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -370,15 +383,31 @@ function Invoke-Checked {
         $previous = (Get-Location).Path
         Set-Location -LiteralPath $WorkingDirectory
     }
+    $previousEap = $ErrorActionPreference
     try {
+        # Continue, not Stop: see the note above. A native command writing to
+        # stderr must not abort the pipeline before we can read its exit code.
+        $ErrorActionPreference = 'Continue'
         $output = & $FilePath @ArgumentList 2>&1 | Out-String
         $code = $LASTEXITCODE
+        $ErrorActionPreference = $previousEap
+
         if ($code -ne 0) {
             $label = if ($Context) { $Context } else { "$FilePath $($ArgumentList -join ' ')" }
-            throw "$label failed with exit code $code`n$output"
+            # Show the TAIL of the output. The real error is at the end; the head
+            # is npm's banner and assorted notices, which is exactly what made
+            # the original failure message useless.
+            # @() is load-bearing: Where-Object returns a SCALAR when exactly one
+            # line survives, and a scalar string has no .Count -- so the error
+            # path would itself throw, replacing a useful message with
+            # "The property 'Count' cannot be found on this object."
+            $lines = @(($output -split "`r?`n") | Where-Object { $_.Trim() })
+            $tail = if ($lines.Count -gt 20) { $lines[-20..-1] -join "`n" } else { $lines -join "`n" }
+            throw "$label failed with exit code $code`n$tail"
         }
         if ($PassThru) { return $output }
     } finally {
+        $ErrorActionPreference = $previousEap
         if ($previous) { Set-Location -LiteralPath $previous }
     }
 }

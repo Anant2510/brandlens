@@ -204,6 +204,40 @@ function Resolve-Component {
         return $true
     }
 
+    # PostgreSQL is a special case, and a predictable one: the EnterpriseDB
+    # installer does NOT put its bin directory on PATH. That is not a refresh
+    # problem and no amount of reopening the shell fixes it -- so rather than
+    # sending the operator away to restart for nothing, find the install and
+    # repair PATH ourselves, for this session and for the machine.
+    if ($Req.Name -eq 'PostgreSQL') {
+        $binDirs = Get-ChildItem 'C:\Program Files\PostgreSQL' -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName 'bin' } |
+            Where-Object { Test-Path (Join-Path $_ 'psql.exe') }
+
+        if ($binDirs) {
+            $bin = @($binDirs)[0]
+            $env:Path = "$env:Path;$bin"
+
+            $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+            if ($machinePath -notlike "*$bin*") {
+                try {
+                    [Environment]::SetEnvironmentVariable('Path', "$machinePath;$bin", 'Machine')
+                    Write-Ok "added to PATH: $bin"
+                } catch {
+                    Write-Warn "could not write the machine PATH: $($_.Exception.Message)"
+                }
+            }
+
+            $version = Get-CommandVersion -Command $Req.Command -Arguments $Req.Args
+            if ($version -and (Compare-Version $version $Req.Minimum)) {
+                Write-Ok "$version"
+                Add-Result $Req.Name 'installed' $version
+                return $true
+            }
+        }
+    }
+
     # Installed but not visible: almost always a PATH refresh that needs a new
     # shell. Say so explicitly rather than reporting a bare failure.
     Write-Fail "$($Req.Name) installed but is not on PATH in this session."
