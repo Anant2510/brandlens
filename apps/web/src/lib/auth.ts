@@ -171,12 +171,35 @@ export async function rotateSession(): Promise<string | null> {
 export type SessionResult =
   | { status: 'authenticated'; user: SessionUser }
   | { status: 'unauthenticated' }
+  /** The access token is spent but a refresh token survives. The caller must
+   *  hand the browser to `/api/auth/refresh`, because rotating the session
+   *  means writing cookies and this function may be running inside a render.
+   *  See the comment on `getSession` below. */
+  | { status: 'needs-refresh' }
   /** The API is down or refusing. Distinct from "signed out" on purpose:
    *  bouncing a signed-in user to the login screen because the API restarted
    *  tells them the wrong thing, and they will retype a password that was
    *  never the problem. */
   | { status: 'unreachable'; statusCode: number; message: string };
 
+/**
+ * Reads the session. **Never writes cookies** — and that constraint is the
+ * whole point of this function's shape.
+ *
+ * Next.js 15 forbids `cookies().set()` during a Server Component render:
+ * headers are already flushed by the time a component runs, so the call throws
+ * `Cookies can only be modified in a Server Action or Route Handler`. This
+ * function is called from `(app)/layout.tsx`, which is a render. An earlier
+ * version rotated the session inline, which meant every session died with a
+ * blank "failed to start this page" screen the moment the access token
+ * expired — roughly fifteen minutes into any sitting.
+ *
+ * Rotation is also not merely a write: the API invalidates the old refresh
+ * token when it issues a new one. Refreshing somewhere the result cannot be
+ * persisted would consume the user's only valid refresh token and destroy the
+ * session outright. So the expired case returns `needs-refresh` and the
+ * caller redirects to the route handler, where a cookie write is legal.
+ */
 export async function getSession(): Promise<SessionResult> {
   const token = await getAccessToken();
 
@@ -189,20 +212,7 @@ export async function getSession(): Promise<SessionResult> {
   const refreshToken = await getRefreshToken();
   if (!refreshToken) return { status: 'unauthenticated' };
 
-  const refreshed = await callApi<AuthResponse>('/v1/auth/refresh', { method: 'POST', body: { refreshToken } });
-  const refreshedTokens = readTokens(refreshed.ok ? refreshed.data : null);
-  if (!refreshedTokens) {
-    if (refreshed.status === 401 || refreshed.status === 403) {
-      await clearSessionCookies();
-      return { status: 'unauthenticated' };
-    }
-    return unreachable(refreshed);
-  }
-
-  await setSessionCookies(refreshedTokens);
-  const retry = await callApi<SessionUser>('/v1/auth/me', { token: refreshedTokens.accessToken });
-  if (retry.ok && retry.data) return { status: 'authenticated', user: retry.data };
-  return retry.status === 401 ? { status: 'unauthenticated' } : unreachable(retry);
+  return { status: 'needs-refresh' };
 }
 
 function unreachable(result: UpstreamResult<unknown>): SessionResult {
@@ -216,6 +226,17 @@ function unreachable(result: UpstreamResult<unknown>): SessionResult {
 }
 
 /** The current session user, or null. Safe to call from a server component. */
+/**
+ * "Is someone signed in right now?" for the entry points that only branch two
+ * ways — the root page and the login/register layout.
+ *
+ * `needs-refresh` deliberately reads as "no". Those routes send an unknown
+ * visitor to the login screen, which is a safe landing spot for a stale
+ * session; the alternative, bouncing them through the refresh handler, risks a
+ * redirect loop on the very screen the loop would strand them on. The signed-in
+ * area (`(app)/layout.tsx`) is where a stale session is worth rescuing, and it
+ * calls `getSession` directly.
+ */
 export async function getSessionUser(): Promise<SessionUser | null> {
   const session = await getSession();
   return session.status === 'authenticated' ? session.user : null;

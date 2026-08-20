@@ -4,6 +4,7 @@ import { PlugZap } from 'lucide-react';
 import { getSession } from '@/lib/auth';
 import { API_URL } from '@/lib/env';
 import { AppShell } from '@/components/app-shell';
+import { SessionRefresh } from '@/components/session-refresh';
 import { SessionProvider } from '@/providers/session-provider';
 import { buttonClasses } from '@/components/ui/button-variants';
 
@@ -13,6 +14,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const session = await getSession();
 
   if (session.status === 'unauthenticated') redirect('/login');
+
+  // The access token expired but the refresh token is still good. Rotation
+  // writes cookies, which a render may not do, so hand off to the route
+  // handler and come straight back. See getSession's comment.
+  if (session.status === 'needs-refresh') return <SessionRefresh />;
 
   // An API restart is not an expired session. Say what actually happened.
   if (session.status === 'unreachable') return <ApiUnreachable statusCode={session.statusCode} message={session.message} />;
