@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { QUEUES, RegisterAssetInput } from '@brandlens/contracts';
 import { type Database, assetDerivatives, assets, variantFamilies } from '@brandlens/db';
@@ -88,7 +88,10 @@ export class AssetsService {
         .from(assets)
         .where(and(...conditions));
 
-      return paginate(rows.map(toDto), n ?? 0, query);
+      const dtos = rows.map(toDto);
+      await this.attachPreviewUrls(tx, orgId, rows, dtos);
+
+      return paginate(dtos, n ?? 0, query);
     });
   }
 
@@ -322,10 +325,65 @@ export class AssetsService {
         .where(and(eq(assetDerivatives.assetId, asset.id), eq(assetDerivatives.kind, 'thumbnail')))
         .limit(1),
     );
-    const key = thumb[0]?.storageKey ?? asset.storageKey;
-    if (!key || key.startsWith('inline:')) return null;
-    if (/^https?:\/\//i.test(key)) return key;
-    return this.storage.signedUrl(key, undefined, disposition);
+    return this.signPreviewKey(thumb[0]?.storageKey ?? asset.storageKey, disposition);
+  }
+
+  /**
+   * The single place a storage key becomes a preview URL.
+   *
+   * Both the list and the detail path need this rule, and they need to agree:
+   * a list that shows a placeholder while the detail page shows the image is
+   * indistinguishable, to a user, from a broken product. Kept as one function
+   * so the three cases (no bytes / already a URL / sign it) cannot drift.
+   */
+  private async signPreviewKey(
+    key: string | null | undefined,
+    disposition: 'inline' | 'attachment' = 'inline',
+  ): Promise<string | null> {
+    switch (previewKeyKind(key)) {
+      case 'none':
+        return null;
+      case 'external':
+        return key as string;
+      case 'sign':
+        return this.storage.signedUrl(key as string, undefined, disposition);
+    }
+  }
+
+  /**
+   * Batch equivalent of `previewUrl` for a page of rows.
+   *
+   * One query for every thumbnail on the page rather than one per asset —
+   * a 50-row page was otherwise 50 round trips to render 50 tiny images.
+   * Signing itself is local HMAC, so it costs nothing worth batching.
+   */
+  private async attachPreviewUrls(tx: Database, orgId: string, rows: AssetRow[], dtos: AssetDto[]): Promise<void> {
+    if (rows.length === 0) return;
+
+    const thumbs = await tx
+      .select({ assetId: assetDerivatives.assetId, storageKey: assetDerivatives.storageKey })
+      .from(assetDerivatives)
+      .where(
+        and(
+          eq(assetDerivatives.orgId, orgId),
+          eq(assetDerivatives.kind, 'thumbnail'),
+          inArray(
+            assetDerivatives.assetId,
+            rows.map((r) => r.id),
+          ),
+        ),
+      );
+    const thumbByAsset = new Map(thumbs.map((t) => [t.assetId, t.storageKey]));
+
+    await Promise.all(
+      rows.map(async (row, i) => {
+        const key = thumbByAsset.get(row.id) ?? row.storageKey;
+        dtos[i].previewUrl = await this.signPreviewKey(key).catch((err) => {
+          this.logger.warn(`Preview URL failed for asset ${row.id}: ${String(err)}`);
+          return null;
+        });
+      }),
+    );
   }
 
   async derivatives(orgId: string, assetId: string) {
@@ -398,6 +456,21 @@ export class AssetsService {
       .set({ status, error: error ?? null, updatedAt: new Date() })
       .where(eq(assets.id, assetId));
   }
+}
+
+/**
+ * How a storage key should become a preview URL.
+ *
+ * `none`     - copy-only assets carry the sentinel `inline:<hash>`; there are
+ *              no bytes behind it, so a signed URL would resolve to a 404 and
+ *              the UI is better off rendering its "no preview" placeholder.
+ * `external` - already an absolute URL (remote driver); hand it through.
+ * `sign`     - a local storage key; HMAC-sign it with a TTL.
+ */
+export function previewKeyKind(key: string | null | undefined): 'none' | 'external' | 'sign' {
+  if (!key || key.startsWith('inline:')) return 'none';
+  if (/^https?:\/\//i.test(key)) return 'external';
+  return 'sign';
 }
 
 export function toDto(row: AssetRow): AssetDto {
