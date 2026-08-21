@@ -472,11 +472,17 @@ export const rules = pgTable(
     }>(),
 
     /** For induced rules: the statistical evidence that produced them. */
+    /** Mirrors RuleSupport in @brandlens/contracts — keep the two in step. */
     support: jsonb('support').$type<{
       sampleSize?: number | null;
       percentile?: number | null;
       observedValue?: number | null;
       exampleAssetIds?: string[] | null;
+      /** Share of the sample supporting the rule, 0..1. */
+      agreement?: number | null;
+      /** Caveat shown to whoever is deciding whether to activate this. */
+      note?: string | null;
+      observed?: Array<Record<string, unknown>> | null;
     }>(),
 
     status: ruleStatusEnum('status').notNull().default('proposed'),

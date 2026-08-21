@@ -38,6 +38,7 @@ DECLARE
     'embeddings', 'asset_measurements',
     'check_runs', 'decision_traces', 'findings', 'reviews',
     'review_decisions', 'precedents', 'rule_calibrations',
+    'discovery_runs', 'discovered_pages',
     'briefs', 'assembly_plans', 'audience_panels', 'predictions',
     'webhook_endpoints', 'webhook_deliveries', 'outbox_events',
     'api_keys', 'cost_ledger', 'audit_log'

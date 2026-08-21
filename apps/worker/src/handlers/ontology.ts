@@ -371,8 +371,14 @@ export async function compileRuleset(job: CompileRulesetJob): Promise<void> {
 /**
  * Inserts machine-generated rules. ALWAYS `proposed` — the parameter for
  * "activate these automatically" deliberately does not exist.
+ *
+ * `provenance` is the default for the batch; an individual proposal may carry
+ * its own. Discovery needs that: it emits measured rules (`inductive`)
+ * alongside imported standards like WCAG (`transfer`) in one batch, and
+ * flattening them to a single label would misstate where each came from —
+ * which is exactly what the provenance field exists to prevent.
  */
-async function insertProposedRules(
+export async function insertProposedRules(
   tx: Database,
   orgId: string,
   brandId: string,
@@ -405,7 +411,7 @@ async function insertProposedRules(
         specificity: computeSpecificity(p.scope),
         check: { fn: p.check.fn, params: p.check.params ?? {} },
         rubric: (p.rubric ?? null) as Record<string, unknown> | null,
-        provenance,
+        provenance: p.provenance && p.provenance !== 'manual' ? p.provenance : provenance,
         citation: documentId ? { ...(p.citation ?? {}), documentId } : (p.citation ?? null),
         support: p.support ?? null,
         status: 'proposed',

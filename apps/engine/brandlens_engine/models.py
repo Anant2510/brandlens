@@ -458,6 +458,86 @@ class ExtractRulesResponse(Wire):
 
 
 # ---------------------------------------------------------------------------
+# Copy intelligence — voice, lexicon, claims and disclaimers from site copy
+# ---------------------------------------------------------------------------
+class CopyPageInput(Wire):
+    url: str
+    role: str = "other"
+    title: str | None = None
+    text: str = ""
+
+
+class AnalyzeCopyRequest(Wire):
+    request_id: str
+    org_id: str
+    brand_id: str | None = None
+    brand_name: str | None = None
+    origin_url: str | None = None
+    pages: list[CopyPageInput] = Field(default_factory=list)
+    provider: str
+    model: str
+    #: Corpus sent to the model. Trimmed rather than summarised — a voice read
+    #: from a summary is the summariser's voice, not the brand's.
+    max_chars: int = 60_000
+
+
+class DiscoveredVoiceAxis(Wire):
+    name: str
+    low_label: str
+    high_label: str
+    #: 0.0 = fully lowLabel, 1.0 = fully highLabel.
+    value: float
+    rationale: str | None = None
+    #: Verbatim sentences from the brand's copy. An axis with no verifiable
+    #: evidence is discarded before it reaches this model.
+    evidence: list[str] = Field(default_factory=list)
+
+
+class DiscoveredLexiconTerm(Wire):
+    term: str
+    kind: str = "preferred"  # preferred|required|banned|avoid
+    note: str | None = None
+    uses: int = 0
+    page_count: int = 0
+
+
+class DiscoveredClaim(Wire):
+    text: str
+    url: str
+    triggers: list[str] = Field(default_factory=list)
+    claim_type: str = "other"
+    needs_substantiation: bool = True
+    suggested_evidence: str | None = None
+    #: False when the model never reached this candidate. Such a claim keeps
+    #: needsSubstantiation=True, because an unanswered question about
+    #: regulated copy resolves to "a human should look".
+    judged: bool = False
+
+
+class DiscoveredDisclaimer(Wire):
+    text: str
+    url: str
+    trigger_condition: str | None = None
+
+
+class ReadabilityProfile(Wire):
+    metrics: dict[str, float] = Field(default_factory=dict)
+    degraded: bool = False
+    stats: dict[str, float] = Field(default_factory=dict)
+
+
+class AnalyzeCopyResponse(Wire):
+    request_id: str
+    voice_axes: list[DiscoveredVoiceAxis] = Field(default_factory=list)
+    lexicon: list[DiscoveredLexiconTerm] = Field(default_factory=list)
+    claims: list[DiscoveredClaim] = Field(default_factory=list)
+    disclaimers: list[DiscoveredDisclaimer] = Field(default_factory=list)
+    readability: ReadabilityProfile = Field(default_factory=ReadabilityProfile)
+    cost_usd: float = 0.0
+    warnings: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Rule induction
 # ---------------------------------------------------------------------------
 class InduceRulesRequest(Wire):

@@ -22,6 +22,7 @@ import { ChecksModule } from './checks/checks.module';
 import { ReviewModule } from './review/review.module';
 import { AssembleModule } from './assemble/assemble.module';
 import { PredictModule } from './predict/predict.module';
+import { DiscoveryModule } from './discovery/discovery.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { PlatformModule } from './platform/platform.module';
@@ -59,6 +60,7 @@ import { MetricsInterceptor } from './platform/metrics.interceptor';
     ReviewModule,
     AssembleModule,
     PredictModule,
+    DiscoveryModule,
     AnalyticsModule,
     OrganizationsModule,
     PlatformModule,

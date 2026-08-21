@@ -167,6 +167,34 @@ export const briefStatusEnum = pgEnum('brief_status', ['draft', 'planned', 'asse
 export const predictionStatusEnum = pgEnum('prediction_status', ['queued', 'running', 'completed', 'failed']);
 
 /* ------------------------------------------------------------------ *
+ * Discovery — URL in, brand ontology out
+ * ------------------------------------------------------------------ */
+export const discoveryStatusEnum = pgEnum('discovery_status', [
+  'queued',
+  'running',
+  'completed',
+  'partial', // some stages succeeded; see stage_errors
+  'failed',
+  'cancelled',
+]);
+
+/**
+ * Stages run in this order and the column stores the one currently executing,
+ * so a stalled run says WHERE it stalled. A single `running` status would make
+ * "stuck for six minutes" indistinguishable between a slow crawl and a hung
+ * vision call.
+ */
+export const discoveryStageEnum = pgEnum('discovery_stage', [
+  'pending',
+  'harvesting', // headless browser walks the site
+  'extracting', // computed styles + copy -> candidate ontology
+  'inducing', // candidate ontology -> proposed rules -> compiled ruleset
+  'checking', // the 40 analyzers run over the harvested pages
+  'reporting', // aggregate into the consolidated report
+  'done',
+]);
+
+/* ------------------------------------------------------------------ *
  * Platform
  * ------------------------------------------------------------------ */
 export const webhookStatusEnum = pgEnum('webhook_status', ['active', 'paused', 'disabled']);

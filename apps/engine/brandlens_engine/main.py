@@ -31,7 +31,9 @@ from .extract import extract_rules
 from .induce import induce_rules
 from .llm.factory import provider_status
 from .logging import bind_request, clear_request, configure_logging, get_logger
+from .copy_intelligence import analyze_copy
 from .models import (
+    AnalyzeCopyRequest,
     AnalyzeRequest,
     AnalyzeResponse,
     AnalyzerHealth,
@@ -124,6 +126,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/extract-rules", response_model=None, dependencies=guard)
     def extract(request: ExtractRulesRequest) -> ORJSONResponse:
         result = extract_rules(request, s)
+        return ORJSONResponse(content=result.model_dump(by_alias=True, mode="json"))
+
+    @app.post("/v1/analyze-copy", response_model=None, dependencies=guard)
+    def analyze_copy_route(request: AnalyzeCopyRequest) -> ORJSONResponse:
+        result = analyze_copy(request, s)
         return ORJSONResponse(content=result.model_dump(by_alias=True, mode="json"))
 
     @app.post("/v1/induce-rules", response_model=None, dependencies=guard)

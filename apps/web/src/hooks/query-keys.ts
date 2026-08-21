@@ -59,6 +59,11 @@ export const qk = {
     panels: (brandId?: string) => ['panels', brandId ?? 'all'] as const,
     prediction: (id: string) => ['predictions', id] as const,
   },
+  discovery: {
+    list: ['discovery', 'list'] as const,
+    run: (id: string) => ['discovery', 'run', id] as const,
+    pages: (id: string) => ['discovery', 'pages', id] as const,
+  },
   platform: {
     members: ['members'] as const,
     organization: ['organization'] as const,

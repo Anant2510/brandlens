@@ -84,11 +84,27 @@ export const RuleCitation = z.object({
   confirmedByUserId: z.string().uuid().nullish(),
 });
 
+/**
+ * The evidence behind a machine-proposed rule.
+ *
+ * A reviewer approving a rule they did not write needs to see what it was
+ * inferred from, and `sampleSize` alone cannot carry that. `agreement` says
+ * how much of the sample actually supported the rule — 6 of 8 pages is a
+ * convention, 8 of 8 is a standard, 2 of 8 is a coincidence someone should
+ * reject. `note` exists so a weak inference can admit it is weak rather than
+ * inheriting the authority of the measured ones sitting next to it.
+ */
 export const RuleSupport = z.object({
   sampleSize: z.number().int().nullish(),
   percentile: z.number().nullish(),
   observedValue: z.number().nullish(),
   exampleAssetIds: z.array(z.string().uuid()).nullish(),
+  /** Share of the sample that supported the rule, 0..1. */
+  agreement: z.number().nullish(),
+  /** Plain-language caveat shown to the reviewer alongside the rule. */
+  note: z.string().nullish(),
+  /** The raw measurements, so a reviewer can check the arithmetic. */
+  observed: z.array(z.record(z.unknown())).nullish(),
 });
 
 export const RuleDefinition = z.object({

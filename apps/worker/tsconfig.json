@@ -3,7 +3,17 @@
     "module": "commonjs",
     "moduleResolution": "node",
     "target": "ES2022",
-    "lib": ["ES2022"],
+    /**
+     * DOM is here for exactly one file: the function in
+     * services/discovery/browser.ts that Playwright serialises and runs INSIDE
+     * the page, where `document` and `getComputedStyle` are real.
+     *
+     * The cost is that `document` now typechecks everywhere in the worker,
+     * including places it would be undefined at runtime. `no-dom-globals.spec.ts`
+     * exists to catch that: it fails the build if a DOM global appears in any
+     * worker file other than the browser script.
+     */
+    "lib": ["ES2022", "DOM"],
     "declaration": false,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
