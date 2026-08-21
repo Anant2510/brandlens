@@ -1,7 +1,8 @@
 import { createHmac } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
+import { dirname, join, normalize, resolve, sep } from 'node:path';
 import type { PutOptions, StatResult, StorageDriver } from '../storage.driver';
+import { resolveStorageRoot } from '../workspace-root';
 
 /**
  * Filesystem driver — the default, and the one that has to be correct.
@@ -19,7 +20,9 @@ export class LocalStorageDriver implements StorageDriver {
     private readonly signingSecret: string,
     private readonly publicUrl: string,
   ) {
-    this.root = isAbsolute(root) ? normalize(root) : resolve(process.cwd(), root);
+    // Anchored to the workspace root, not process.cwd() — PM2 gives every
+    // service a different cwd. See resolveStorageRoot for the full story.
+    this.root = resolveStorageRoot(root);
   }
 
   /**
