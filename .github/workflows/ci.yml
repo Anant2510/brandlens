@@ -76,6 +76,14 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # Discovery's only integration test renders a real page in a real
+      # browser. Without Chromium it skips, and a skipped test that reports
+      # green is worse than no test — it is a regression detector that has
+      # been quietly switched off. ~30s and one cached download buys the
+      # only proof that the harvester works end to end.
+      - name: Install Chromium for the discovery harvest test
+        run: pnpm --filter @brandlens/worker exec playwright install --with-deps chromium
+
       - name: Unit tests
         run: pnpm test
 
@@ -271,6 +279,11 @@ jobs:
         run: pnpm typecheck
 
       - name: Unit tests
+        env:
+          # The Windows job proves the build and the PowerShell scripts, not
+          # the crawler. Downloading Chromium here would add minutes for a test
+          # ubuntu already ran against a real browser.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: pnpm test
 
       - name: Build

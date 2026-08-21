@@ -23,6 +23,7 @@ import {
   type AssembleBriefJob,
   type PredictAssetJob,
 } from './handlers/assemble-predict';
+import { discoverBrand, type DiscoverBrandJob } from './handlers/discover-brand';
 import { dispatchOutbox, type DispatchOutboxJob } from './handlers/dispatch-outbox';
 import { reconcile, type ReconcileJob } from './handlers/reconcile';
 
@@ -77,6 +78,10 @@ async function main(): Promise<void> {
 
   runtime.register<PredictAssetJob & Record<string, unknown>>(QUEUES.predictAsset, (data) =>
     predictAsset(data as PredictAssetJob),
+  );
+
+  runtime.register<DiscoverBrandJob & Record<string, unknown>>(QUEUES.discoverBrand, (data) =>
+    discoverBrand(data as DiscoverBrandJob),
   );
 
   runtime.register<DispatchOutboxJob & Record<string, unknown>>(QUEUES.dispatchOutbox, (data) =>

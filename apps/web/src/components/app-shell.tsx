@@ -15,6 +15,7 @@ import {
   Layers,
   LogOut,
   Menu,
+  Radar,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -46,6 +47,7 @@ const PRIMARY_NAV: NavItem[] = [
 ];
 
 const SECONDARY_NAV: NavItem[] = [
+  { href: '/discover', label: 'Discover', icon: Radar, prefix: true },
   { href: '/assemble', label: 'Assemble', icon: FileStack, prefix: true },
   { href: '/predict', label: 'Predict', icon: TrendingUp, prefix: true },
 ];

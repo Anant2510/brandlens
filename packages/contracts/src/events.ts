@@ -23,6 +23,7 @@ export const EVENT_TYPES = [
   'budget.threshold_crossed',
   'brief.assembled',
   'prediction.completed',
+  'discovery.completed',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -51,6 +52,7 @@ export const QUEUES = {
   calibrateRule: 'learning.calibrate-rule',
   assembleBrief: 'assemble.brief',
   predictAsset: 'predict.asset',
+  discoverBrand: 'discovery.run',
   dispatchOutbox: 'platform.dispatch-outbox',
   reconcile: 'platform.reconcile',
 } as const;
@@ -69,6 +71,11 @@ export const QUEUE_POOL: Record<QueueName, 'cpu_media' | 'llm_io' | 'default'> =
   [QUEUES.calibrateRule]: 'default',
   [QUEUES.assembleBrief]: 'llm_io',
   [QUEUES.predictAsset]: 'llm_io',
+  // cpu_media: a discovery run is dominated by headless Chromium renders, and
+  // a browser is far heavier than any LLM call it later makes. Putting it in
+  // the llm_io pool would let two crawls saturate the box while the vision
+  // queue sat idle.
+  [QUEUES.discoverBrand]: 'cpu_media',
   [QUEUES.dispatchOutbox]: 'default',
   [QUEUES.reconcile]: 'default',
 };

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  AnalyzeCopyResponse,
   AnalyzeResponse,
   AssembleResponse,
   EngineHealth,
@@ -33,6 +34,10 @@ export class EngineClient {
 
   extractRules(body: Record<string, unknown>): Promise<z.infer<typeof ExtractRulesResponse>> {
     return this.post('/extract-rules', body, ExtractRulesResponse, { timeoutMs: 900_000 });
+  }
+
+  analyzeCopy(body: Record<string, unknown>): Promise<z.infer<typeof AnalyzeCopyResponse>> {
+    return this.post('/analyze-copy', body, AnalyzeCopyResponse, { timeoutMs: 180_000, retries: 1 });
   }
 
   induceRules(body: Record<string, unknown>): Promise<z.infer<typeof InduceRulesResponse>> {

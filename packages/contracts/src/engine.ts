@@ -298,6 +298,84 @@ export const InduceRulesResponse = z.object({
 });
 
 /* --------------------------------------------------------------------------
+ * Copy intelligence — voice, lexicon, claims and disclaimers from site copy
+ *
+ * Engine-produced, so every optional field is `.nullish()` rather than
+ * `.optional()`. Pydantic serialises an unset Optional as an explicit null,
+ * and `.optional()` would reject a perfectly good analysis. See ADR 0011.
+ * ------------------------------------------------------------------------ */
+export const CopyPageInput = z.object({
+  url: z.string(),
+  role: z.string().default('other'),
+  title: z.string().nullish(),
+  text: z.string().default(''),
+});
+
+export const AnalyzeCopyRequest = z.object({
+  requestId: z.string(),
+  orgId: z.string(),
+  brandId: z.string().nullish(),
+  brandName: z.string().nullish(),
+  originUrl: z.string().nullish(),
+  pages: z.array(CopyPageInput),
+  provider: z.string(),
+  model: z.string(),
+  maxChars: z.number().int().optional(),
+});
+export type AnalyzeCopyRequest = z.infer<typeof AnalyzeCopyRequest>;
+
+export const DiscoveredVoiceAxisWire = z.object({
+  name: z.string(),
+  lowLabel: z.string(),
+  highLabel: z.string(),
+  value: z.number(),
+  rationale: z.string().nullish(),
+  evidence: z.array(z.string()).default([]),
+});
+
+export const DiscoveredLexiconTermWire = z.object({
+  term: z.string(),
+  kind: z.string().default('preferred'),
+  note: z.string().nullish(),
+  uses: z.number().int().default(0),
+  pageCount: z.number().int().default(0),
+});
+
+export const DiscoveredClaimWire = z.object({
+  text: z.string(),
+  url: z.string(),
+  triggers: z.array(z.string()).default([]),
+  claimType: z.string().default('other'),
+  needsSubstantiation: z.boolean().default(true),
+  suggestedEvidence: z.string().nullish(),
+  judged: z.boolean().default(false),
+});
+
+export const DiscoveredDisclaimerWire = z.object({
+  text: z.string(),
+  url: z.string(),
+  triggerCondition: z.string().nullish(),
+});
+
+export const ReadabilityProfileWire = z.object({
+  metrics: z.record(z.number()).default({}),
+  degraded: z.boolean().default(false),
+  stats: z.record(z.number()).default({}),
+});
+
+export const AnalyzeCopyResponse = z.object({
+  requestId: z.string(),
+  voiceAxes: z.array(DiscoveredVoiceAxisWire).default([]),
+  lexicon: z.array(DiscoveredLexiconTermWire).default([]),
+  claims: z.array(DiscoveredClaimWire).default([]),
+  disclaimers: z.array(DiscoveredDisclaimerWire).default([]),
+  readability: ReadabilityProfileWire.default({ metrics: {}, degraded: false, stats: {} }),
+  costUsd: z.number().default(0),
+  warnings: z.array(z.string()).default([]),
+});
+export type AnalyzeCopyResponse = z.infer<typeof AnalyzeCopyResponse>;
+
+/* --------------------------------------------------------------------------
  * Assemble & Predict
  * ------------------------------------------------------------------------ */
 export const AssembleRequest = z.object({
