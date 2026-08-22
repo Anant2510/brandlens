@@ -9,6 +9,7 @@ const SECTIONS = [
   { segment: '', label: 'Overview' },
   { segment: '/ontology', label: 'Ontology' },
   { segment: '/rules', label: 'Rules' },
+  { segment: '/rule-packs', label: 'Standards' },
   { segment: '/rules/review', label: 'Confirm proposals' },
   { segment: '/documents', label: 'Documents' },
   { segment: '/rulesets', label: 'Rulesets' },

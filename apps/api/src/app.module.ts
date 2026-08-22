@@ -16,6 +16,7 @@ import { PlatformCoreModule } from './platform/platform-core.module';
 import { BrandsModule } from './brands/brands.module';
 import { OntologyModule } from './ontology/ontology.module';
 import { RulesModule } from './rules/rules.module';
+import { RulePacksModule } from './rule-packs/rule-packs.module';
 import { RulesetsModule } from './rulesets/rulesets.module';
 import { AssetsModule } from './assets/assets.module';
 import { ChecksModule } from './checks/checks.module';
@@ -54,6 +55,7 @@ import { MetricsInterceptor } from './platform/metrics.interceptor';
     BrandsModule,
     OntologyModule,
     RulesModule,
+    RulePacksModule,
     RulesetsModule,
     AssetsModule,
     ChecksModule,

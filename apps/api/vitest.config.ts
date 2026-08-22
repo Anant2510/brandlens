@@ -10,9 +10,13 @@ export default defineConfig({
     globals: false,
   },
   resolve: {
-    alias: {
-      '@brandlens/contracts': r('../../packages/contracts/src/index.ts'),
-      '@brandlens/db': r('../../packages/db/src/index.ts'),
-    },
+    // Ordered: the subpath pattern has to be tried before the bare-name one,
+    // or `@brandlens/db/seed/rule-packs` resolves to the package index and
+    // then fails to find the export.
+    alias: [
+      { find: /^@brandlens\/contracts$/, replacement: r('../../packages/contracts/src/index.ts') },
+      { find: /^@brandlens\/db\/seed\//, replacement: r('../../packages/db/src/seed/steps/') },
+      { find: /^@brandlens\/db$/, replacement: r('../../packages/db/src/index.ts') },
+    ],
   },
 });

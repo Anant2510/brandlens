@@ -33,6 +33,24 @@ export const channelSpecs = pgTable(
     platform: varchar('platform', { length: 60 }).notNull(), // meta|tiktok|google|amazon|linkedin|dooh|print|iab
     placement: varchar('placement', { length: 120 }).notNull(), // feed|story|reel|in-stream|display
     assetType: varchar('asset_type', { length: 40 }).notNull(), // image|video|html5
+
+    /**
+     * The scope-lattice channel this placement belongs to.
+     *
+     * Two vocabularies meet here and they do not compose. A spec is keyed by
+     * `platform`/`placement` because that is how the platforms publish them;
+     * a rule is scoped by `channel` because that is how a brand thinks about
+     * where creative runs. Four of the nine concatenate cleanly — meta/feed is
+     * `meta-feed` — and five do not: print/a4-portrait is `print-a4`,
+     * linkedin/feed-single-image is `linkedin-feed`, google/display-* are all
+     * `display`.
+     *
+     * Deriving it would therefore be right most of the time and silently wrong
+     * for print and display — the placements where channel-scoped rules
+     * (prepress, safe zones) matter most. So it is recorded rather than
+     * inferred, and a brief target resolves to a channel by reading it.
+     */
+    channel: varchar('channel', { length: 60 }),
     version: varchar('version', { length: 40 }).notNull().default('2026.1'),
     effectiveFrom: timestamp('effective_from', { withTimezone: true }),
 

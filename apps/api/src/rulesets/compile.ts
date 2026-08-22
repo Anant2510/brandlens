@@ -42,6 +42,17 @@ export interface CompiledRule {
   optimizedPromptHash: string | null;
   /** beta < 0.3 ⇒ the judge does not track this tenant's reviewers. */
   autoRouteToHuman: boolean;
+  /** `inherited` came from a shipped rule pack; `brand` is the tenant's own.
+   *
+   *  NOT part of the ruleset hash — `rulesetHash` covers only the fields that
+   *  change what gets enforced, and where a rule came from does not. Forking a
+   *  baseline rule still changes the hash, because the fork ADDS a row: the
+   *  compiled set then carries both the brand's copy and the inherited one, and
+   *  resolution picks the winner per asset. Disabling a pack changes it for the
+   *  same reason, in reverse. */
+  origin: 'brand' | 'inherited';
+  /** Which pack an inherited rule came from, for display and for revocation. */
+  packKey: string | null;
   createdAt?: Date | string | null;
 }
 
@@ -74,6 +85,10 @@ export interface CompilableRuleRow {
   status: string;
   optimizedPromptHash: string | null;
   calibration: { autoRouteToHuman?: boolean } | null;
+  /** Defaults to `brand` when absent, so callers that predate packs — and
+   *  every existing test — keep their previous behaviour untouched. */
+  origin?: 'brand' | 'inherited';
+  packKey?: string | null;
   createdAt: Date;
 }
 
@@ -110,6 +125,8 @@ export function compileRows(
       status: r.status,
       optimizedPromptHash: r.optimizedPromptHash,
       autoRouteToHuman: Boolean(r.calibration?.autoRouteToHuman),
+      origin: r.origin ?? 'brand',
+      packKey: r.packKey ?? null,
       createdAt: r.createdAt,
     }))
     // Sorted before hashing so row order from Postgres cannot change the hash.

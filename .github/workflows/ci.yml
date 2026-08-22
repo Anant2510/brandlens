@@ -220,6 +220,19 @@ jobs:
         working-directory: apps/engine
         run: python -m pytest -q -p no:warnings
 
+      # The manifest of which parameters each analyzer reads is generated FROM
+      # the analyzers, and the TypeScript side asserts every rule against it.
+      # A stale manifest turns that guard from a safety net into a source of
+      # false failures — it would reject a rule using a parameter that was
+      # added last week, and wave through one whose parameter was renamed. So
+      # it is regenerated here and the job fails if the checked-in copy differs.
+      - name: Analyzer parameter manifest is current
+        working-directory: apps/engine
+        run: |
+          python scripts/analyzer_params.py || true
+          git diff --exit-code -- ../../packages/contracts/src/analyzer-manifest.generated.ts \
+            || { echo "::error::analyzer-manifest.generated.ts is stale — run apps/engine/scripts/analyzer_params.py and commit the result"; exit 1; }
+
       # The engine must boot and report its own capabilities honestly. With no
       # API keys configured it should come up "degraded" — running every T0/T1
       # check and abstaining on T2 — NOT crash. That behaviour is a product

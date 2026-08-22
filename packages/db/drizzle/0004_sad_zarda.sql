@@ -1,0 +1,1 @@
+ALTER TABLE "rule_templates" ADD COLUMN "needs" text[] DEFAULT '{}' NOT NULL;

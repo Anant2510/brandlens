@@ -20,6 +20,7 @@ import { upsertRows } from '../lib/upsert.js';
 import { storeSeedFile } from '../lib/io.js';
 import { generateCreatives, type GeneratedCreative } from '../generate/creatives.js';
 import { SEED_CHANNEL_SPECS } from '../data/channel-specs.js';
+import { assertChannelSpecsEnforceable } from '../data/validate.js';
 import { USERS } from './tenant.js';
 
 export interface SeededAsset extends GeneratedCreative {
@@ -197,6 +198,10 @@ export async function seedAssets(tx: Database, orgId: string, brandId: string): 
  * fails the channel_specs WITH CHECK clause under a bound tenant, by design.
  */
 export async function seedChannelSpecs(tx: Database): Promise<number> {
+  // Before a row is written, not after: a registry whose keys the engine never
+  // reads publishes constraints that constrain nothing, and every asset passes
+  // a check the console says is running.
+  assertChannelSpecsEnforceable();
   await upsertRows(
     tx,
     channelSpecs,
@@ -205,6 +210,7 @@ export async function seedChannelSpecs(tx: Database): Promise<number> {
       orgId: null,
       platform: s.platform,
       placement: s.placement,
+      channel: s.channel,
       assetType: s.assetType,
       version: s.version,
       effectiveFrom: new Date('2026-01-01T00:00:00Z'),

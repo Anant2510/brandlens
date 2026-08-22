@@ -57,7 +57,8 @@ export function synthesizeCopyRules(input: CopyRuleInput): RuleDefinition[] {
       scope: {},
       check: {
         fn: 'copy.banned_terms',
-        params: { terms: banned.map((t) => t.term), matchWholeWord: true, allowFuzzy: true },
+        // `terms` is the only key this analyzer reads — see analyzer-params.json.
+        params: { terms: banned.map((t) => t.term) },
       },
       provenance: 'inductive',
       status: 'proposed',
@@ -81,7 +82,7 @@ export function synthesizeCopyRules(input: CopyRuleInput): RuleDefinition[] {
       severity: 'minor',
       weight: 0.6,
       scope: {},
-      check: { fn: 'copy.required_terms', params: { terms: required.map((t) => t.term), minMatches: 1 } },
+      check: { fn: 'copy.required_terms', params: { terms: required.map((t) => t.term) } },
       provenance: 'inductive',
       status: 'proposed',
       support: {
@@ -113,7 +114,12 @@ export function synthesizeCopyRules(input: CopyRuleInput): RuleDefinition[] {
       severity: 'blocker',
       weight: 1,
       scope: {},
-      check: { fn: 'copy.claim_substantiation', params: { requireApproval: true, checkExpiry: true } },
+      // Approval and expiry are not optional behaviours the rule switches on —
+      // the analyzer always checks both. `requireApproval`/`checkExpiry` here
+      // read as configuration and were read by nothing. `fuzzyThreshold` is
+      // the one knob it has: how close asset copy must be to a registered
+      // claim to count as the same claim.
+      check: { fn: 'copy.claim_substantiation', params: { fuzzyThreshold: 88 } },
       provenance: 'inductive',
       status: 'proposed',
       support: {
@@ -130,26 +136,35 @@ export function synthesizeCopyRules(input: CopyRuleInput): RuleDefinition[] {
     rules.push({
       key: 'copy.disclaimer-present',
       version: 1,
-      statement: 'Required disclaimers must be present, legible and close to the claim they qualify.',
+      // Presence only, and the statement says so. It previously promised
+      // "present, legible and close to the claim they qualify" while passing
+      // `minFontSizePt` and `minContrastRatio` to an analyzer that reads
+      // neither — so an asset with a 5pt grey disclaimer passed a rule whose
+      // text promised to catch exactly that. Legibility is covered, but by
+      // `accessibility.font-size-floor` and `accessibility.contrast`, which
+      // measure it; proximity is not covered by any analyzer yet.
+      statement: 'Required disclaimers must appear in full wherever the claim they qualify appears.',
       rationale:
-        `${copy.disclaimers.length} disclaimer${copy.disclaimers.length === 1 ? '' : 's'} appear on the site. ` +
-        'Legibility thresholds are the shipped defaults, not measurements — confirm them against the brand’s ' +
-        'legal guidance.',
+        `${copy.disclaimers.length} disclaimer${copy.disclaimers.length === 1 ? '' : 's'} appear on the site and ` +
+        'have been added to the register. This rule checks presence and wording only — legibility is enforced ' +
+        'separately by the size-floor and contrast rules, which measure it rather than declaring it.',
       dimension: 'copy',
       tier: 'deterministic',
       severity: 'blocker',
       weight: 1,
       scope: {},
-      check: { fn: 'copy.disclaimer_present', params: { minFontSizePt: 8, minContrastRatio: 4.5 } },
+      // How close asset copy must be to the registered wording to count as the
+      // same disclaimer. Truncating the small print is the failure this catches.
+      check: { fn: 'copy.disclaimer_present', params: { fuzzyThreshold: 85 } },
       provenance: 'inductive',
       status: 'proposed',
       support: {
         sampleSize: pageCount,
-        // Deliberately low. Presence was measured; the thresholds were not,
-        // and a rule that mixes the two should not claim the confidence of
-        // the measured half.
+        // Presence on the site is measured; whether the brand's legal team
+        // considers these the required disclaimers is not, and the number
+        // reflects the weaker half rather than the stronger.
         agreement: 0.4,
-        note: 'Disclaimer presence is measured; the size and contrast thresholds are defaults.',
+        note: 'The disclaimers were found on the site; that they are the ones legal requires is unconfirmed.',
         observed: copy.disclaimers.slice(0, 8).map((d) => ({ text: d.text, trigger: d.triggerCondition ?? null })),
       } as RuleDefinition['support'],
     });
@@ -177,7 +192,10 @@ export function synthesizeCopyRules(input: CopyRuleInput): RuleDefinition[] {
       severity: 'minor',
       weight: 0.5,
       scope: {},
-      check: { fn: 'copy.readability', params: { maxGrade, minWords: 20, metric: 'fleschKincaidGrade' } },
+      // `maxFleschKincaidGrade`, not `maxGrade`: an unrecognised key is not an
+      // error, the analyzer just falls back to its default — so the rule would
+      // have displayed a threshold and enforced nothing.
+      check: { fn: 'copy.readability', params: { maxFleschKincaidGrade: maxGrade, minWords: 20 } },
       provenance: 'inductive',
       status: 'proposed',
       support: {
@@ -208,21 +226,16 @@ export function synthesizeCopyRules(input: CopyRuleInput): RuleDefinition[] {
       severity: 'minor',
       weight: 0.7,
       scope: {},
-      check: {
-        fn: 'vlm.voice_tone',
-        params: {
-          axes: copy.voiceAxes.map((a) => ({
-            name: a.name,
-            lowLabel: a.lowLabel,
-            highLabel: a.highLabel,
-            target: a.value,
-            // Wide on purpose. A discovered voice is an inference from one
-            // reading of a website; scoring copy against it to within a tenth
-            // would be false precision dressed as rigour.
-            tolerance: 0.25,
-          })),
-        },
-      },
+      // No parameters: the judge reads the brand's voice attributes from the
+      // ontology, which the same discovery run writes as a "we are / we are
+      // NOT" pair per axis, weighted by how firmly the brand sits on it.
+      //
+      // An `axes` array with per-axis `target` and `tolerance` floats used to
+      // sit here. Nothing read it — and it was false precision anyway: a voice
+      // inferred from one reading of a website does not support scoring copy
+      // to within a tenth. The weight on each attribute carries the same idea
+      // honestly, and reaches the judge.
+      check: { fn: 'vlm.voice_tone', params: {} },
       rubric: {
         kind: 'ordinal',
         question:

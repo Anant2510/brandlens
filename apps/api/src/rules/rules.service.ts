@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { BulkRuleDecisionInput, CreateRuleInput, UpdateRuleInput } from '@brandlens/contracts';
+import { BulkRuleDecisionInput, CreateRuleInput, UpdateRuleInput, explainCheck, sanitiseCheck } from '@brandlens/contracts';
 import { type Database, rules } from '@brandlens/db';
 import { TenantRepository } from '../database/tenant.repository';
 import { AuditService } from '../audit/audit.service';
@@ -73,6 +73,7 @@ export class RulesService {
     input: z.infer<typeof CreateRuleInput>,
   ): Promise<RuleRow> {
     await this.brands.requireBrand(orgId, brandId);
+    assertCheckIsEnforceable(input.check, input.key, input.rubric);
 
     return this.repo.run(async (tx) => {
       const [{ max }] = await tx
@@ -172,6 +173,7 @@ export class RulesService {
     }
 
     return this.repo.run(async (tx) => {
+      if (input.check) assertCheckIsEnforceable(input.check, current.key, input.rubric ?? current.rubric);
       const patch = patchFrom(input, current);
       const nextStatus = input.status === 'active' ? 'active' : 'proposed';
 
@@ -311,6 +313,8 @@ export class RulesService {
         .from(rules)
         .where(and(eq(rules.brandId, brandId), eq(rules.key, p.key)));
 
+      const sanitised = sanitiseCheck(p.check);
+
       const [row] = await tx
         .insert(rules)
         .values({
@@ -319,14 +323,20 @@ export class RulesService {
           key: p.key,
           version: (max ?? 0) + 1,
           statement: p.statement,
-          rationale: p.rationale ?? null,
+          rationale: [p.rationale, sanitised.note].filter(Boolean).join(' ') || null,
           dimension: p.dimension,
           tier: p.tier,
           severity: p.severity,
           weight: p.weight,
           scope: p.scope,
           specificity: computeSpecificity(p.scope),
-          check: { fn: p.check.fn, params: p.check.params ?? {} },
+          // Sanitised, not refused. These proposals come from a model reading
+          // a brand book: discarding one because it invented a parameter name
+          // throws away the part it got right, and keeping the parameter would
+          // show a reviewer a threshold the engine never applies. So the dead
+          // keys come off and what was dropped is written into the rationale,
+          // where the person deciding whether to activate it will see it.
+          check: sanitised.check as { fn: string; params: Record<string, unknown> },
           rubric: (p.rubric ?? null) as Record<string, unknown> | null,
           provenance,
           citation: p.citation ?? null,
@@ -339,6 +349,25 @@ export class RulesService {
     }
     return ids;
   }
+}
+
+/**
+ * Refuses a check whose parameters the engine will not read.
+ *
+ * An unrecognised key is not an error at check time — the analyzer falls back
+ * to its default — so a rule saved with one displays a threshold in the
+ * console, records it in the audit trail, and enforces something else. That is
+ * worse than a rule nobody wrote, because somebody signed this one off. The
+ * message names the key, the key that was probably meant, and the value the
+ * engine would have used instead, so a 400 is a correction rather than a wall.
+ */
+function assertCheckIsEnforceable(
+  check: { fn: string; params?: Record<string, unknown> | null },
+  key: string,
+  rubric?: { question?: string | null } | null,
+): void {
+  const problem = explainCheck(check, key, rubric);
+  if (problem) throw new BadRequestException(problem);
 }
 
 /** Builds a partial update from the DTO, recomputing derived columns. */

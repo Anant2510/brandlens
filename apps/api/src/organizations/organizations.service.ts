@@ -212,7 +212,12 @@ export class OrganizationsService {
         .limit(1),
     );
     if (!rows[0]) throw new NotFoundException('Organization not found');
-    return rows[0];
+    // `daily_usd_limit` is a `text` column — money is kept out of float
+    // arithmetic on purpose — but the wire contract says number, and the
+    // console formats it as one. Converting HERE, at the boundary that owns
+    // the column, is what keeps that promise true; leaving it as text made
+    // every screen that renders it throw "toFixed is not a function".
+    return { ...rows[0], dailyUsdLimit: Number(rows[0].dailyUsdLimit) };
   }
 
   async updateSettings(
@@ -237,7 +242,10 @@ export class OrganizationsService {
         entityId: orgId,
         payload: input as Record<string, unknown>,
       });
-      return row;
+      // Same conversion as `settings()` — the save response feeds straight
+      // back into the form, so returning text here would break the screen on
+      // save even though the initial load worked.
+      return { ...row, dailyUsdLimit: Number(row.dailyUsdLimit) };
     });
   }
 

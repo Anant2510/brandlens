@@ -124,19 +124,31 @@ function buildIcon(inkHex: string): { canvas: Canvas; markHeight: number } {
   return { canvas, markHeight };
 }
 
-/** Shared usage constraints. Clear space is 1.35× the logomark height. */
+/**
+ * Shared usage constraints. Clear space is 1.35× the logomark height.
+ *
+ * These are the variant's OWN defaults, used by `logo.clearspace` and
+ * `logo.min_size` when the rule sets no threshold of its own — so the key
+ * names have to be the ones the engine looks up, exactly as they do in
+ * `check.params`. They previously were not: `clearSpaceUnit` (the engine reads
+ * `clearSpaceBasis`) and `minWidthPx/Pct/Mm` (the engine measures HEIGHT, and
+ * reads `minHeightPx/Pct/Mm`), plus four keys — allowedBackgrounds,
+ * allowedZones, maxAspectDeviationPct, forbidEffects — that no analyzer reads
+ * from a variant at all. Placement and distortion take their thresholds from
+ * the rule, not from here.
+ *
+ * A constraint the engine cannot see is a guideline nobody is held to, and it
+ * is harder to notice here than in a rule: there is no console screen showing
+ * these numbers back to anyone.
+ */
 function constraintsFor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     clearSpaceMultiple: 1.35,
-    clearSpaceUnit: 'logomark_height',
-    minWidthPx: 120,
-    minWidthPct: 0.08,
-    minWidthMm: 25,
-    allowedBackgrounds: 'light',
-    allowedZones: ['top-left', 'bottom-right'],
-    maxAspectDeviationPct: 2,
-    maxRotationDeg: 0.5,
-    forbidEffects: ['drop-shadow', 'outer-glow', 'gradient-fill', 'photographic-fill'],
+    clearSpaceBasis: 'height',
+    // 6% of canvas height, and 12mm tall in print — the same figures the
+    // logo.min-size rules carry, so a rule and its variant cannot disagree.
+    minHeightPct: 6,
+    minHeightMm: 12,
     ...overrides,
   };
 }

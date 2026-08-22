@@ -38,7 +38,7 @@ DECLARE
     'embeddings', 'asset_measurements',
     'check_runs', 'decision_traces', 'findings', 'reviews',
     'review_decisions', 'precedents', 'rule_calibrations',
-    'discovery_runs', 'discovered_pages',
+    'discovery_runs', 'discovered_pages', 'brand_rule_packs',
     'briefs', 'assembly_plans', 'audience_panels', 'predictions',
     'webhook_endpoints', 'webhook_deliveries', 'outbox_events',
     'api_keys', 'cost_ledger', 'audit_log'
@@ -79,6 +79,42 @@ BEGIN
     ALTER TABLE public.channel_specs FORCE ROW LEVEL SECURITY;
     DROP POLICY IF EXISTS channel_specs_tenant_isolation ON public.channel_specs;
     CREATE POLICY channel_specs_tenant_isolation ON public.channel_specs
+      USING (
+        brandlens_rls_bypassed()
+        OR org_id IS NULL
+        OR org_id = brandlens_current_tenant()
+      )
+      WITH CHECK (
+        brandlens_rls_bypassed()
+        OR org_id = brandlens_current_tenant()
+      );
+  END IF;
+
+  -- Shipped rule packs and their templates (org_id IS NULL) are readable by
+  -- every tenant and writable by none: a tenant that could UPDATE a shipped
+  -- accessibility rule would be editing the standard for everybody else on
+  -- the instance. Tenant-authored packs behave like ordinary tenant data.
+  IF to_regclass('public.rule_packs') IS NOT NULL THEN
+    ALTER TABLE public.rule_packs ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.rule_packs FORCE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS rule_packs_tenant_isolation ON public.rule_packs;
+    CREATE POLICY rule_packs_tenant_isolation ON public.rule_packs
+      USING (
+        brandlens_rls_bypassed()
+        OR org_id IS NULL
+        OR org_id = brandlens_current_tenant()
+      )
+      WITH CHECK (
+        brandlens_rls_bypassed()
+        OR org_id = brandlens_current_tenant()
+      );
+  END IF;
+
+  IF to_regclass('public.rule_templates') IS NOT NULL THEN
+    ALTER TABLE public.rule_templates ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.rule_templates FORCE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS rule_templates_tenant_isolation ON public.rule_templates;
+    CREATE POLICY rule_templates_tenant_isolation ON public.rule_templates
       USING (
         brandlens_rls_bypassed()
         OR org_id IS NULL

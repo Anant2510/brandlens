@@ -24,6 +24,8 @@
 export interface SeedChannelSpec {
   platform: string;
   placement: string;
+  /** The scope-lattice channel a rule targets. See the schema note. */
+  channel: string;
   assetType: 'image' | 'video' | 'html5';
   version: string;
   spec: Record<string, unknown>;
@@ -40,6 +42,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'meta',
     placement: 'feed',
+    channel: 'meta-feed',
     assetType: 'image',
     version: VERSION,
     docsUrl: 'https://www.facebook.com/business/ads-guide/image/facebook-feed',
@@ -69,6 +72,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'meta',
     placement: 'story',
+    channel: 'meta-story',
     assetType: 'image',
     version: VERSION,
     docsUrl: 'https://www.facebook.com/business/ads-guide/image/instagram-stories',
@@ -90,6 +94,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'meta',
     placement: 'reel',
+    channel: 'meta-reel',
     assetType: 'video',
     version: VERSION,
     docsUrl: 'https://www.facebook.com/business/ads-guide/video/instagram-reels',
@@ -118,6 +123,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'tiktok',
     placement: 'in-feed',
+    channel: 'tiktok-in-feed',
     assetType: 'video',
     version: VERSION,
     docsUrl: 'https://ads.tiktok.com/help/article/tiktok-video-ad-specifications',
@@ -150,6 +156,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'tiktok',
     placement: 'in-feed',
+    channel: 'tiktok-in-feed',
     assetType: 'image',
     version: VERSION,
     docsUrl: 'https://ads.tiktok.com/help/article/carousel-ads',
@@ -175,6 +182,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'google',
     placement: 'display-medium-rectangle',
+    channel: 'display',
     assetType: 'image',
     version: VERSION,
     docsUrl: 'https://support.google.com/google-ads/answer/1722096',
@@ -198,6 +206,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'google',
     placement: 'display-leaderboard',
+    channel: 'display',
     assetType: 'image',
     version: VERSION,
     docsUrl: 'https://support.google.com/google-ads/answer/1722096',
@@ -218,6 +227,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'google',
     placement: 'display-half-page',
+    channel: 'display',
     assetType: 'image',
     version: VERSION,
     docsUrl: 'https://support.google.com/google-ads/answer/1722096',
@@ -238,6 +248,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'google',
     placement: 'display-mobile-banner',
+    channel: 'display',
     assetType: 'image',
     version: VERSION,
     docsUrl: 'https://support.google.com/google-ads/answer/1722096',
@@ -261,6 +272,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'linkedin',
     placement: 'feed-single-image',
+    channel: 'linkedin-feed',
     assetType: 'image',
     version: VERSION,
     docsUrl: 'https://www.linkedin.com/help/lms/answer/a424270',
@@ -283,6 +295,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'linkedin',
     placement: 'feed-video',
+    channel: 'linkedin-feed',
     assetType: 'video',
     version: VERSION,
     docsUrl: 'https://www.linkedin.com/help/lms/answer/a423271',
@@ -314,6 +327,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'amazon',
     placement: 'sponsored-brands',
+    channel: 'amazon-a-plus',
     assetType: 'image',
     version: VERSION,
     docsUrl: 'https://advertising.amazon.com/resources/ad-specs/sponsored-brands',
@@ -340,6 +354,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'amazon',
     placement: 'a-plus-standard-image',
+    channel: 'amazon-a-plus',
     assetType: 'image',
     version: VERSION,
     docsUrl: 'https://sellercentral.amazon.com/help/hub/reference/GHFCFQAA9SPVJ8AC',
@@ -362,6 +377,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'print',
     placement: 'a4-portrait',
+    channel: 'print-a4',
     assetType: 'image',
     version: VERSION,
     notes: 'ISO 216 A4 at 300dpi, with 3mm bleed and a 5mm safety margin.',
@@ -389,6 +405,7 @@ export const SEED_CHANNEL_SPECS: SeedChannelSpec[] = [
   {
     platform: 'print',
     placement: 'a5-landscape',
+    channel: 'print-a5',
     assetType: 'image',
     version: VERSION,
     notes: 'A5 landscape at 300dpi. In-store and direct mail.',

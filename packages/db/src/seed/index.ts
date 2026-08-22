@@ -27,6 +27,7 @@ config({ path: resolve(here, '../../../../.env') });
 import { closeDb, getDb, withTenant } from '../client.js';
 import { seedTenant, DEMO_PASSWORD, USERS } from './steps/tenant.js';
 import { seedOntology } from './steps/ontology.js';
+import { seedRulePacks } from './steps/rule-packs.js';
 import { seedAssets, seedChannelSpecs } from './steps/assets.js';
 import { seedChecks } from './steps/checks.js';
 import { SEED_CLAIMS, SEED_DISCLAIMERS, SEED_LEXICON, SEED_MARKETS, SEED_TYPE_STYLES, SEED_VOICE } from './data/brand.js';
@@ -97,7 +98,21 @@ async function main(): Promise<void> {
   step('global registry', `${channelSpecCount} specs (meta, tiktok, google, linkedin, amazon, print)`);
 
   /* ------------------------------------------------------------------ *
-   * 3 — ontology, assets and the check run, all under the tenant.
+   * 3 — shipped rule packs (org_id IS NULL ⇒ needs bypass)
+   *
+   * Platform data, like the channel registry: written once for the
+   * installation, readable by every tenant, writable by none. Every brand
+   * inherits the baseline packs without a row being written for it.
+   * ------------------------------------------------------------------ */
+  heading('rule packs');
+  const packs = await withTenant(db, { orgId: tenant.orgId, bypassRls: true }, (tx) => seedRulePacks(tx));
+  step('shipped packs', `${packs.packs} (${packs.enabledByDefault} inherited by default, ${packs.packs - packs.enabledByDefault} opt-in)`);
+  step('inherited templates', `${packs.inheritedTemplates} rules every brand gets without asking`);
+  step('opt-in templates', `${packs.optInTemplates} across the regulated packs`);
+  step('usable on day one', `${packs.dayOneRules} produce a verdict with no ontology at all`);
+
+  /* ------------------------------------------------------------------ *
+   * 4 — ontology, assets and the check run, all under the tenant.
    *
    * One transaction: a half-seeded brand with rules but no ruleset would make
    * every check fail with NoActiveRuleset, which looks like a product bug.

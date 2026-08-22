@@ -849,6 +849,132 @@ def check_subject_appropriateness(ctx: Any, rule: RuleDefinition) -> Any:
     )
 
 
+def check_rubric(ctx: Any, rule: RuleDefinition) -> Any:
+    """The generic judge: ask THIS rule's own rubric.
+
+    WHY THIS EXISTS
+    ---------------
+    Every other `vlm.*` analyzer hardcodes its question — voice_tone asks about
+    voice, mood asks about mood. That means a semantic rule a brand actually
+    wants ("the headline must be about the snowboarding experience", "the
+    people in the hero must be centrally positioned") could not be written at
+    all without shipping a new engine. The alternative was to smuggle such a
+    rule through `vlm.mood`, which would put a rule about composition under a
+    check named for atmosphere — a label that is confidently wrong, and the
+    exact failure this codebase keeps finding.
+
+    So: the rubric IS the criterion. The rule supplies the question, the pass
+    and fail conditions, the ordinal anchors if it has them, and the crop.
+
+    WHAT KEEPS IT FROM BECOMING THE VIBES ANALYZER
+    ----------------------------------------------
+    A judge with no measurements is a judge estimating, and this engine's whole
+    position is that models judge but do not measure. So every rubric call is
+    handed the geometry that is cheap and always available: the canvas, and for
+    each element the crop already marks, its centre and its distance from the
+    canvas centre — computed here, in code.
+
+    That turns "is the subject centrally positioned" from a visual guess into a
+    question anchored to numbers the judge can be held to, and it is why the
+    marked-up crop and the measurement block have to describe the SAME
+    elements. `select_crop` numbers them; this function measures the numbered
+    ones; the model answers by referring to a number.
+    """
+    rubric = rule.rubric
+    if rubric is None or not rubric.question.strip():
+        # Not `not_applicable`: that means "this rule does not apply to this
+        # asset", which is a statement about the asset. This is a malformed
+        # rule, and saying so is the only way anybody finds out — a rubric-less
+        # rule that quietly asked "is this good?" would return verdicts nobody
+        # could trace to a question.
+        return build_result(
+            rule,
+            "insufficient_evidence",
+            observation=(
+                f"{rule.key} uses vlm.rubric but carries no rubric question, so there is nothing to "
+                "adjudicate. Add a rubric with a question, or point the rule at a specific analyzer."
+            ),
+            measured={"hasRubric": rubric is not None},
+        )
+
+    params = rule.check.params
+    # A copy rubric must not fail because the asset would not rasterise. The
+    # default follows the crop: `text` means the question is about words.
+    require_image = bool(params.get("requireImage", rubric.crop_to != "text"))
+
+    measurements: dict[str, Any] = {"rubricKind": rubric.kind}
+    img = ctx.image()
+    # Geometry only when the picture itself is going: a question about wording
+    # gets no image, and shipping twelve element boxes alongside it would burn
+    # tokens describing a canvas the judge was never shown.
+    if img is not None and require_image:
+        measurements["canvas"] = {
+            "width": img.width,
+            "height": img.height,
+            "aspectRatio": round(img.width / max(img.height, 1), 4),
+        }
+        measurements["elements"] = _element_geometry(ctx, rule)
+
+    if bool(params.get("includeCopy", rubric.crop_to == "text")):
+        from .copy_checks import asset_copy
+
+        text, source = asset_copy(ctx)
+        if text.strip():
+            measurements["copySource"] = source
+            measurements["copy"] = text[: int(params.get("maxCopyChars", 4000))]
+
+    return _judge_or_degrade(
+        ctx,
+        rule,
+        question=rubric.question,
+        measurements=measurements,
+        crop_to=rubric.crop_to,
+        pass_when=rubric.pass_when,
+        fail_when=rubric.fail_when,
+        require_image=require_image,
+    )
+
+
+def _element_geometry(ctx: Any, rule: RuleDefinition) -> list[dict[str, Any]]:
+    """Where each detected element sits, measured rather than estimated.
+
+    The `mark` number matches the number drawn on the crop, so the judge can
+    answer "element 2 sits at 0.78 across" instead of "it looks off to the
+    right" — and its bbox reference resolves to a real region rather than a
+    hallucinated rectangle.
+
+    `offsetFromCenter` is the euclidean distance from the canvas centre in
+    normalised units: 0 is dead centre, ~0.71 is a corner. A composition rule
+    can then be written against a number instead of an impression.
+    """
+    from .layout import collect_elements
+
+    elements, _source = collect_elements(ctx)
+    out: list[dict[str, Any]] = []
+    for index, element in enumerate(elements[:12], start=1):
+        # `float()` rather than the raw value: element boxes can arrive as numpy
+        # scalars from the CV path, and a measurement dict that is half numpy
+        # and half Python serialises inconsistently and reads as noise in logs.
+        cx = float(element.bbox[0] + element.bbox[2]) / 2
+        cy = float(element.bbox[1] + element.bbox[3]) / 2
+        out.append(
+            {
+                "mark": index,
+                "kind": element.kind,
+                "label": element.label[:40],
+                "bbox": [round(float(v), 4) for v in element.bbox],
+                "center": [round(cx, 4), round(cy, 4)],
+                "offsetFromCenter": round(math.hypot(cx - 0.5, cy - 0.5), 4),
+                "areaFrac": round(
+                    float(max(0.0, element.bbox[2] - element.bbox[0]))
+                    * float(max(0.0, element.bbox[3] - element.bbox[1])),
+                    4,
+                ),
+            }
+        )
+    return out
+
+
 def check_overall_judgment(ctx: Any, rule: RuleDefinition) -> Any:
     """A holistic read, informed by everything already measured.
 
@@ -941,6 +1067,7 @@ __all__ = [
     "JudgeOutcome",
     "JudgeSample",
     "balance_precedents",
+    "check_rubric",
     "build_brand_ontology",
     "check_mood",
     "check_overall_judgment",

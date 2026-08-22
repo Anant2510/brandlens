@@ -93,6 +93,53 @@ export interface RuleCalibration {
 export type RuleStatus = 'proposed' | 'active' | 'deprecated' | 'rejected';
 export type RuleProvenance = 'deductive' | 'inductive' | 'transfer' | 'manual';
 
+/* --- rule packs ---------------------------------------------------------- */
+
+export interface RulePackSummary {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  category: 'baseline' | 'regulated' | 'heuristic';
+  version: number;
+  authority: string | null;
+  docsUrl: string | null;
+  jurisdictions: string[];
+  enabled: boolean;
+  /** False when the brand is taking the pack's default rather than deciding. */
+  decided: boolean;
+  enabledByDefault: boolean;
+  reason: string | null;
+  templateCount: number;
+  activeTemplateCount: number;
+  forkedCount: number;
+  overriddenCount: number;
+}
+
+export interface InheritedRule {
+  templateId: string;
+  templateVersion: number;
+  packKey: string;
+  packName: string;
+  packVersion: number;
+  key: string;
+  statement: string;
+  rationale: string | null;
+  dimension: RuleDimension;
+  tier: CheckTier;
+  severity: Severity;
+  weight: number;
+  check: { fn: string; params?: Record<string, unknown> };
+  status: RuleStatus;
+  guidance: string | null;
+  citation: RuleCitation | null;
+  needs: string[];
+  /** `needs` this brand has not populated — the rule abstains until it does. */
+  missingOntology: string[];
+  overriddenBy: { ruleId: string; version: number; status: string; forked: boolean } | null;
+  drift: { forkedFromVersion: number; currentVersion: number } | null;
+}
+
 export interface Rule {
   id: string;
   orgId: string;

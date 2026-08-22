@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 from numpy.typing import NDArray
 
+from .channel_spec import resolve_spec, safe_zone_rects
 from .color import rgb_to_lab
 from .media import bbox_iou
 from .models import RuleDefinition, build_result
@@ -259,16 +260,34 @@ def check_safe_zone(ctx: AnalysisContext, rule: RuleDefinition) -> CriterionResu
     """
     params = rule.check.params
     zones_param = params.get("zones") or params.get("safeZones")
+    zone_source = "rule.params"
+    if not zones_param:
+        # The registry knows the real zones, and they are per placement and
+        # asymmetric — TikTok's caption bar is 310px up from the bottom of a
+        # 1920px canvas while its action rail is 120px in from the right. A
+        # rule cannot carry those without pinning itself to one placement, so
+        # the spec for whatever channel THIS asset declares is the right
+        # source, and an `insetPct` on the rule is the fallback for a brand
+        # whose placements are not in the registry.
+        spec, spec_key = resolve_spec(ctx.brand.channel_spec, ctx.asset.channel, ctx.asset.asset_type)
+        zones_param = safe_zone_rects(spec)
+        zone_source = f"channelSpec[{spec_key}]"
+
     if not zones_param:
         inset = params.get("insetPct")
         if inset is None:
             return build_result(
                 rule,
                 "not_applicable",
-                observation="No safe zones are configured on this rule.",
-                measured={"zones": 0},
+                observation=(
+                    "No safe zones are configured on this rule and none are published for this asset's "
+                    "channel. Set `insetPct` for a uniform band, or add the placement to the channel spec "
+                    "registry to get its real asymmetric zones."
+                ),
+                measured={"zones": 0, "zoneSource": "none"},
             )
         i = float(inset) / 100.0
+        zone_source = "rule.params.insetPct"
         zones_param = [
             {"name": "edge-inset", "bbox": [0, 0, 1, i]},
             {"name": "edge-inset", "bbox": [0, 1 - i, 1, 1]},
@@ -314,11 +333,12 @@ def check_safe_zone(ctx: AnalysisContext, rule: RuleDefinition) -> CriterionResu
 
     measured = {
         "source": source,
+        "zoneSource": zone_source,
         "elementCount": len(elements),
         "intrusionCount": len(intrusions),
         "intrusions": sorted(intrusions, key=lambda i: -float(i["overlapFracOfElement"]))[:15],  # type: ignore[arg-type]
     }
-    thresholds = {"zones": zones_param, "intrusionToleranceFrac": tolerance}
+    thresholds = {"zones": zones_param, "intrusionToleranceFrac": tolerance, "zoneSource": zone_source}
     if intrusions:
         worst = measured["intrusions"][0]  # type: ignore[index]
         return build_result(
@@ -340,7 +360,7 @@ def check_safe_zone(ctx: AnalysisContext, rule: RuleDefinition) -> CriterionResu
         "pass",
         measured=measured,
         threshold=thresholds,
-        observation=f"No element intrudes into the {len(zones_param)} configured safe zone(s).",
+        observation=f"No element intrudes into the {len(zones_param)} safe zone(s) from {zone_source}.",
         confidence=0.95,
     )
 

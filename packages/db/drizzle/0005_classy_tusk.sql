@@ -1,0 +1,1 @@
+ALTER TABLE "channel_specs" ADD COLUMN "channel" varchar(60);

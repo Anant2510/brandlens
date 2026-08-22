@@ -611,11 +611,23 @@ rows for reads but requires the tenant's own id for writes.
 
 `spec` carries aspect ratios with tolerances, min/max dimensions, byte
 ceilings, formats, duration/fps/bitrate/audio for video, **safe zones**, text
-limits and a text-density advisory.
+limits and a text-density advisory. Print rows add trim size, bleed, safety
+margin, colour space, total ink coverage, crop marks and outlined fonts.
 
 Boring, tedious, constantly drifting — and therefore a real moat. Every
 platform changes its safe zones two to four times a year and nobody maintains
 them well.
+
+**Every key in `spec` is accounted for by the engine**, and that is enforced
+rather than intended: `SPEC_KEYS` in `apps/engine/brandlens_engine/channel_spec.py`
+gives each one a role — `enforced` here, `delegated` to a named analyzer
+(`safeZones` → `layout.safe_zone`, `minLegalFontPt` → `typography.min_size`),
+`authorable` via `vlm.rubric`, `unmeasurable` with the reason, or `reference`.
+It is extracted to `packages/contracts` by AST and the seed refuses to write a
+registry row carrying a key with no role. Without that guard a spec key is
+worse than absent: the placement publishes 3mm of bleed, the console shows 3mm
+of bleed, and every asset passes. That was in fact the state of things — the
+registry and the analyzer shared three keys out of forty.
 
 ### `webhook_endpoints`, `outbox_events`, `webhook_deliveries`
 

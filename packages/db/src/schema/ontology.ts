@@ -485,6 +485,15 @@ export const rules = pgTable(
       observed?: Array<Record<string, unknown>> | null;
     }>(),
 
+    /* --- Fork lineage ------------------------------------------------------
+     * Set when this rule was forked from a shipped template. Keeping the
+     * template's version too is what lets the console say "the baseline has
+     * moved on since you forked this" — a fork with no lineage silently rots
+     * while the standard it copied gets corrected underneath it.
+     * -------------------------------------------------------------------- */
+    forkedFromTemplateId: uuid('forked_from_template_id'),
+    forkedFromVersion: integer('forked_from_version'),
+
     status: ruleStatusEnum('status').notNull().default('proposed'),
     effectiveFrom: timestamp('effective_from', { withTimezone: true }),
     effectiveTo: timestamp('effective_to', { withTimezone: true }),

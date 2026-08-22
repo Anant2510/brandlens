@@ -35,7 +35,8 @@
     "paths": {
       "@brandlens/contracts": ["../../packages/contracts/src/index.ts"],
       "@brandlens/db": ["../../packages/db/src/index.ts"],
-      "@brandlens/db/schema": ["../../packages/db/src/schema/index.ts"]
+      "@brandlens/db/schema": ["../../packages/db/src/schema/index.ts"],
+      "@brandlens/db/seed/rule-packs": ["../../packages/db/src/seed/steps/rule-packs.ts"]
     }
   },
   "include": ["src/**/*.ts"],

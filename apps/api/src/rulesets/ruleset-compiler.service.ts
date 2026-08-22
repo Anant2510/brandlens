@@ -16,6 +16,7 @@ import {
   type ScoringConfig,
 } from './compile';
 import type { ScopeContext } from './specificity';
+import { loadInheritedRules, mergeRuleRows } from './inherited-rules';
 
 export { DEFAULT_SCORING, compileRows } from './compile';
 export type { CompiledRule, CompiledRuleset, ScoringConfig } from './compile';
@@ -38,15 +39,22 @@ export class RulesetCompilerService {
    * the audit trail defensible when the rules were machine-extracted.
    */
   async compile(orgId: string, brandId: string, scoring?: Partial<ScoringConfig>): Promise<CompiledRuleset> {
-    const rows = await this.repo.runAs(orgId, undefined, (tx) =>
-      tx
+    const { rows, inherited } = await this.repo.runAs(orgId, undefined, async (tx) => {
+      const rows = await tx
         .select()
         .from(rules)
         .where(and(eq(rules.brandId, brandId), eq(rules.status, 'active')))
-        .orderBy(rules.key, desc(rules.version)),
-    );
+        .orderBy(rules.key, desc(rules.version));
 
-    return compileRows(brandId, rows as unknown as CompilableRuleRow[], scoring);
+      // Shipped packs come in beneath the brand's own rules, so a brand with
+      // nothing authored yet still compiles to something worth checking
+      // against. `origin` decides the winner where both carry an empty scope.
+      const inherited = (await loadInheritedRules(tx, orgId, brandId)).filter((r) => r.status === 'active');
+      return { rows, inherited };
+    });
+
+    const merged = mergeRuleRows(rows as unknown as CompilableRuleRow[], inherited);
+    return compileRows(brandId, merged, scoring);
   }
 
   /**

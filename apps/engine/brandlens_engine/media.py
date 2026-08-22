@@ -194,6 +194,172 @@ def render_pdf_page(data: bytes, page_index: int = 0, dpi: float = 150.0) -> Loa
 
 
 # ---------------------------------------------------------------------------
+# Asking the file about itself
+#
+# `load_image_bytes` normalises everything to sRGB RGB at a dpi that falls back
+# to 96.0. That is right for measuring colour and wrong for answering the two
+# questions a print spec is made of — "was this delivered in CMYK?" and "how
+# big is it in millimetres?" — because after normalisation a CMYK source is
+# indistinguishable from an RGB one, and an unknown resolution is
+# indistinguishable from a real 96dpi file. Both have to be asked of the bytes.
+# ---------------------------------------------------------------------------
+_PT_PER_MM = 72.0 / 25.4
+
+
+@dataclass(slots=True)
+class SourceProbe:
+    """What the file declares about itself, before any conversion."""
+
+    format: str | None = None
+    #: PIL mode of the SOURCE: "CMYK", "RGB", "L", "P"...  None for PDF.
+    mode: str | None = None
+    width_px: int = 0
+    height_px: int = 0
+    #: Set only when the file itself declares a resolution, never defaulted.
+    dpi: float | None = None
+
+    @property
+    def is_pdf(self) -> bool:
+        return self.format == "PDF"
+
+
+@dataclass(slots=True)
+class PageGeometry:
+    """A PDF page's boxes, in millimetres. The prepress view of the file."""
+
+    media_mm: tuple[float, float]
+    #: The finished page after cutting. Equal to the media box when unset,
+    #: which is itself the finding: a file supplied with no trim box has no
+    #: bleed either, because there is nothing for the bleed to be outside of.
+    trim_mm: tuple[float, float]
+    #: Smallest distance from the trim box to the media box edge.
+    bleed_mm: float
+    trim_declared: bool
+    #: Vector art lying wholly outside the trim box — crop marks, registration
+    #: targets, colour bars. Bleed artwork crosses the trim edge and so is
+    #: excluded by construction.
+    marks_outside_trim: int
+    #: Extractable text means live fonts. Outlined type extracts as nothing.
+    extractable_text_chars: int
+    placed_images: int
+    #: Effective resolution of the lowest-resolution placed raster: its pixel
+    #: width over the width it is drawn at. This — not the dpi the page happens
+    #: to be rasterised at — is what a printer means by the file's resolution.
+    #: None when the page is vector-only, which has no resolution to fall short
+    #: of.
+    min_image_dpi: float | None
+
+
+def probe_source(data: bytes) -> SourceProbe:
+    """Header-only inspection. Does not decode pixels."""
+    if data[:5] == b"%PDF-":
+        return SourceProbe(format="PDF")
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            dpi: float | None = None
+            info_dpi = img.info.get("dpi")
+            if isinstance(info_dpi, tuple) and info_dpi:
+                try:
+                    value = float(info_dpi[0])
+                    dpi = value if value > 1 else None
+                except (TypeError, ValueError):
+                    dpi = None
+            return SourceProbe(
+                format=img.format, mode=img.mode, width_px=int(img.width), height_px=int(img.height), dpi=dpi
+            )
+    except Exception as exc:  # noqa: BLE001 - a probe never breaks a run
+        log.warning("source_probe_failed", error=str(exc))
+        return SourceProbe()
+
+
+def probe_page_geometry(data: bytes, page_index: int = 0) -> PageGeometry | None:
+    """Page boxes and prepress marks, or None when the bytes are not a PDF."""
+    if data[:5] != b"%PDF-":
+        return None
+    try:
+        import pymupdf
+    except ImportError:  # pragma: no cover
+        return None
+    try:
+        with pymupdf.open(stream=data, filetype="pdf") as doc:
+            if doc.page_count == 0:
+                return None
+            page = doc[max(0, min(page_index, doc.page_count - 1))]
+            media, trim = page.mediabox, page.trimbox
+            declared = (
+                abs(trim.width - media.width) > 0.5 or abs(trim.height - media.height) > 0.5
+            )
+            bleed_pt = min(
+                trim.x0 - media.x0, trim.y0 - media.y0, media.x1 - trim.x1, media.y1 - trim.y1
+            )
+            marks = 0
+            if declared:
+                for item in page.get_drawings():
+                    box = item.get("rect")
+                    if box is None:
+                        continue
+                    # `intersects` is inclusive of touching edges, so art that
+                    # merely bleeds off the trim edge is not counted as a mark.
+                    if not pymupdf.Rect(box).intersects(trim):
+                        marks += 1
+            dpis: list[float] = []
+            for info in page.get_image_info():
+                box = pymupdf.Rect(info["bbox"])
+                if box.width > 1 and info.get("width"):
+                    dpis.append(float(info["width"]) / (box.width / 72.0))
+                if box.height > 1 and info.get("height"):
+                    dpis.append(float(info["height"]) / (box.height / 72.0))
+            return PageGeometry(
+                media_mm=(media.width / _PT_PER_MM, media.height / _PT_PER_MM),
+                trim_mm=(trim.width / _PT_PER_MM, trim.height / _PT_PER_MM),
+                bleed_mm=max(0.0, bleed_pt / _PT_PER_MM),
+                trim_declared=declared,
+                marks_outside_trim=marks,
+                extractable_text_chars=len(page.get_text().strip()),
+                placed_images=len(page.get_images()),
+                min_image_dpi=min(dpis) if dpis else None,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("page_geometry_failed", error=str(exc))
+        return None
+
+
+def cmyk_planes(data: bytes, dpi: float = 72.0) -> NDArray[np.uint8] | None:
+    """The four separations as an (h, w, 4) uint8 array, or None.
+
+    Returns None for an RGB source rather than converting one, because a
+    conversion invents the black generation: RGB(0,0,0) becomes 100% K and
+    reports 100% ink where the file a printer receives may carry 320%. A
+    guessed ink figure that reads as a pass is worse than no figure at all.
+    """
+    if data[:5] == b"%PDF-":
+        try:
+            import pymupdf
+        except ImportError:  # pragma: no cover
+            return None
+        try:
+            with pymupdf.open(stream=data, filetype="pdf") as doc:
+                if doc.page_count == 0:
+                    return None
+                pix = doc[0].get_pixmap(colorspace=pymupdf.csCMYK, dpi=int(dpi), alpha=False)
+                if pix.n != 4:
+                    return None
+                arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 4)
+                return np.ascontiguousarray(arr)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cmyk_render_failed", error=str(exc))
+            return None
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            if img.mode != "CMYK":
+                return None
+            return np.ascontiguousarray(np.asarray(img.convert("CMYK"), dtype=np.uint8))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cmyk_open_failed", error=str(exc))
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------------
 def denorm_bbox(
@@ -395,9 +561,12 @@ def file_size_bytes(uri: str) -> int | None:
 __all__ = [
     "LoadedImage",
     "MediaError",
+    "PageGeometry",
+    "SourceProbe",
     "Tile",
     "bbox_iou",
     "bbox_union",
+    "cmyk_planes",
     "content_hash",
     "denorm_bbox",
     "draw_set_of_mark",
@@ -407,6 +576,8 @@ __all__ = [
     "load_image",
     "load_image_bytes",
     "norm_bbox",
+    "probe_page_geometry",
+    "probe_source",
     "render_pdf_page",
     "resize_max_edge",
     "resolve_uri",
