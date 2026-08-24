@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { describeCheckDrift, formatCheckDrift } from '@brandlens/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DiscoveryBrowser } from './browser';
 import { extractPalette, extractTypeStyles, findContrastFailures, rankLogoCandidates } from './extract-identity';
@@ -194,19 +195,35 @@ describe('harvest → extract → synthesize, against a real rendered page', () 
     // real browser output rather than on a fixture.
     expect(rules.every((r) => r.status === 'proposed')).toBe(true);
 
+    // The family reaches the analyzer through the ontology's type styles, not
+    // through `check.params` — the analyzer has no `families` key — so the
+    // rule's own statement is where it is asserted.
     const family = rules.find((r) => r.key === 'typography.approved-family');
-    expect(family?.check.params.families).toEqual(['Georgia']);
+    expect(family?.statement).toContain('Georgia');
 
-    // The 9px footer disclaimer must be SEEN (it gets its own floor) and must
-    // NOT become the standard (the floor is clamped to 12px).
-    const legalRule = rules.find((r) => r.key === 'typography.min-size-legal');
-    expect(legalRule, 'the 9px footer line should produce a legal min-size rule').toBeTruthy();
-    expect(legalRule?.check.params.minPx).toBe(12);
-    expect(legalRule?.support?.note).toContain('currently violates');
+    // Every parameter on every rule this real page produced must be one the
+    // engine reads. This is the assertion that would have caught six dead
+    // parameter names on rules that had been running in production.
+    for (const rule of rules) {
+      const drift = describeCheckDrift(rule.check.fn, rule.check.params);
+      expect(drift ? formatCheckDrift(drift, rule.key) : null).toBeNull();
+    }
 
-    // Body copy keeps its own, higher floor rather than inheriting the
-    // disclaimer's size.
-    expect(rules.find((r) => r.key === 'typography.min-size')?.check.params.minPx).toBeGreaterThanOrEqual(12);
+    // The 9px footer disclaimer must be SEEN and must NOT become the standard.
+    // It is caught by the absolute legibility floor rather than by a legal
+    // band of its own: `typography.min_size` has no per-role parameter, so a
+    // second rule could only have restated the first one globally.
+    const floor = rules.find((r) => r.key === 'accessibility.font-size-floor');
+    expect(floor, 'the 9px footer line should produce an absolute size floor').toBeTruthy();
+    expect(floor?.check.params.minSizePt).toBe(9);
+    expect(floor?.support?.note).toContain('currently violates');
+
+    // The brand's own per-style floors — including the 9px one — are recorded
+    // as evidence rather than flattened into a single number.
+    const sizeRule = rules.find((r) => r.key === 'typography.min-size');
+    const observed = sizeRule?.support?.observed as { role: string; floorPx: number }[] | undefined;
+    expect(observed, JSON.stringify(sizeRule?.support)).toBeTruthy();
+    expect(Math.min(...(observed ?? []).map((o) => o.floorPx))).toBeLessThanOrEqual(10);
   }, 120_000);
 
   it('renders the same page at mobile width', async () => {

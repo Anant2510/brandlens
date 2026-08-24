@@ -15,6 +15,7 @@ export {
   checkRuns, decisionTraces, findings, reviews, reviewDecisions, precedents, ruleCalibrations,
 } from './schema/checks.js';
 export { discoveryRuns, discoveredPages } from './schema/discovery.js';
+export { rulePacks, ruleTemplates, brandRulePacks } from './schema/rule-packs.js';
 export {
   channelSpecs, webhookEndpoints, webhookDeliveries, outboxEvents,
   briefs, assemblyPlans, audiencePanels, predictions, resultCache, systemState,

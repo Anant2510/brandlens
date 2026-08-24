@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any
 
-from .channel_spec import resolve_spec
+from .channel_spec import resolve_spec, safe_zone_rects, spec_dimensions
 from .config import Settings, get_settings
 from .llm.base import LLMError, NullProvider
 from .llm.factory import build_provider, canonical_provider
@@ -46,6 +47,12 @@ def collect_constraints(rules: list[RuleDefinition], brand_channel_spec: dict[st
         "allowedCtas": None,
         "maxOccupiedTextCells": None,
     }
+
+    # The placement's published safe zones, before any rule is consulted: they
+    # are what the channel will draw over regardless of what anybody authored,
+    # and a plan that puts the CTA under TikTok's caption bar is wrong however
+    # well it satisfies the ruleset.
+    constraints["safeZones"].extend(safe_zone_rects(spec))
 
     for rule in rules:
         if rule.status not in ("active", "proposed"):
@@ -92,9 +99,9 @@ def score_candidate(candidate: Any, target: dict[str, Any], constraints: dict[st
     reasons: list[str] = []
     score = float(candidate.score) if candidate.score is not None else 0.5
 
-    spec = constraints.get("spec") or {}
-    want_w = spec.get("width") or target.get("width")
-    want_h = spec.get("height") or target.get("height")
+    size = spec_dimensions(constraints.get("spec"))
+    want_w = (size[0] if size else None) or target.get("width")
+    want_h = (size[1] if size else None) or target.get("height")
     if want_w and want_h and candidate.width and candidate.height:
         target_aspect = float(want_w) / max(float(want_h), 1e-6)
         cand_aspect = float(candidate.width) / max(float(candidate.height), 1e-6)
@@ -128,15 +135,52 @@ def score_candidate(candidate: Any, target: dict[str, Any], constraints: dict[st
     return round(min(1.0, score), 4), reasons
 
 
-def build_plan(request: AssembleRequest) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    brief_tags = {
-        t.lower()
-        for t in (
-            list(request.brief.audience.get("tags", []) if isinstance(request.brief.audience, dict) else [])
-            + request.brief.mandatories
-        )
-        if isinstance(t, str)
+def _brief_tags(brief: Any) -> set[str]:
+    """The words that describe what should be IN the picture.
+
+    `mandatories` used to be folded in here, and it is a category error that
+    quietly disabled candidate ranking: a mandatory is text the asset must
+    CARRY — a brand name, a disclaimer, a risk warning — while a candidate's
+    tags describe what the photograph SHOWS. "Northwind" and "Subscribe" will
+    never overlap with "hero", "pour", "beans". So the overlap was almost
+    always zero, every candidate took the same 0.6 multiplier, and the ranking
+    collapsed to input order while still reporting a confident-looking score.
+
+    What is left is the fields that genuinely describe content: an explicit tag
+    list, and the words of the objective and key message. Free text is a weak
+    signal, which is why it is a signal rather than a filter — a brief that
+    says "warm autumn pour" should prefer the photograph tagged `pour`.
+    """
+    tags: set[str] = set()
+
+    audience = brief.audience if isinstance(brief.audience, dict) else {}
+    for tag in audience.get("tags", []) or []:
+        if isinstance(tag, str) and tag.strip():
+            tags.add(tag.strip().lower())
+
+    for phrase in (brief.objective, brief.key_message, brief.title):
+        if not isinstance(phrase, str):
+            continue
+        for word in re.findall(r"[a-z]{4,}", phrase.lower()):
+            if word not in _STOPWORDS:
+                tags.add(word)
+
+    return tags
+
+
+#: Words that appear in every brief and would match every candidate.
+_STOPWORDS = frozenset(
+    {
+        "with", "that", "this", "from", "your", "our", "and", "the", "for", "into",
+        "drive", "make", "help", "want", "need", "more", "than", "them", "they",
+        "campaign", "creative", "asset", "assets", "brand", "audience", "customers",
+        "signups", "launch", "push", "across", "every", "must", "should", "using",
     }
+)
+
+
+def build_plan(request: AssembleRequest) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    brief_tags = _brief_tags(request.brief)
     targets = request.brief.targets or [{"channel": None, "assetType": None}]
     items: list[dict[str, Any]] = []
     applied: dict[str, Any] = {}
@@ -155,9 +199,9 @@ def build_plan(request: AssembleRequest) -> tuple[list[dict[str, Any]], dict[str
         )
 
         chosen = ranked[0] if ranked else None
-        spec = constraints.get("spec") or {}
-        width = spec.get("width") or target.get("width")
-        height = spec.get("height") or target.get("height")
+        size = spec_dimensions(constraints.get("spec"))
+        width = (size[0] if size else None) or target.get("width")
+        height = (size[1] if size else None) or target.get("height")
 
         mandatory = list(dict.fromkeys(request.brief.mandatories + constraints["mandatoryText"]))
         for disclaimer in request.brand.disclaimers:

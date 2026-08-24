@@ -11,6 +11,11 @@ export const qk = {
     list: (brandId: string, filters: object) => ['rules', brandId, 'list', filters] as const,
     history: (brandId: string, key: string) => ['rules', brandId, 'history', key] as const,
   },
+  rulePacks: {
+    all: (brandId: string) => ['rule-packs', brandId] as const,
+    list: (brandId: string) => ['rule-packs', brandId, 'list'] as const,
+    inherited: (brandId: string) => ['rule-packs', brandId, 'inherited'] as const,
+  },
   rulesets: {
     all: (brandId: string) => ['rulesets', brandId] as const,
     list: (brandId: string) => ['rulesets', brandId, 'list'] as const,

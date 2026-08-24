@@ -1,11 +1,11 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Probes all four BrandLens services plus the database and prints a status table.
 
 .DESCRIPTION
     Functional, not cosmetic: every row is a real request, not a process check.
-    A process can be "online" in PM2 and still be unable to serve traffic —
+    A process can be "online" in PM2 and still be unable to serve traffic --
     that is exactly the failure this script exists to catch.
 
     Checks, in order of dependency:
@@ -70,7 +70,7 @@ $webUrl = (Get-EnvValue -Key 'WEB_PUBLIC_URL' -Env $envMap -Default 'http://loca
 $engineUrl = (Get-EnvValue -Key 'ENGINE_URL' -Env $envMap -Default 'http://127.0.0.1:8000').TrimEnd('/')
 $databaseUrl = Get-EnvValue -Key 'DATABASE_URL' -Env $envMap -Default 'postgresql://brandlens:brandlens@localhost:5432/brandlens'
 
-Write-Banner 'BrandLens · healthcheck' (Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')
+Write-Banner 'BrandLens - healthcheck' (Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')
 
 $results = [System.Collections.Generic.List[object]]::new()
 
@@ -103,7 +103,7 @@ function Add-Check {
 }
 
 # ---------------------------------------------------------------------------
-# 1 — database
+# 1 -- database
 # ---------------------------------------------------------------------------
 $psql = Get-PsqlPath
 if ($psql) {
@@ -132,13 +132,13 @@ if ($psql) {
         Add-Check -Component 'database' -Ok $false -Detail $_.Exception.Message
     }
 } else {
-    # No psql on this host is not a health failure — the API's deep check
+    # No psql on this host is not a health failure -- the API's deep check
     # covers the database anyway, from the process that actually needs it.
     Add-Check -Component 'database' -Ok $true -Detail 'psql not installed; covered by api-deep' -Required $false
 }
 
 # ---------------------------------------------------------------------------
-# 2 — engine
+# 2 -- engine
 # ---------------------------------------------------------------------------
 $engine = Test-HttpEndpoint -Url "$engineUrl/health" -TimeoutSeconds $TimeoutSeconds
 if ($engine.Ok) {
@@ -155,7 +155,7 @@ if ($engine.Ok) {
 }
 
 # ---------------------------------------------------------------------------
-# 3 — api liveness
+# 3 -- api liveness
 # ---------------------------------------------------------------------------
 $api = Test-HttpEndpoint -Url "$apiUrl/health" -TimeoutSeconds $TimeoutSeconds
 if ($api.Ok) {
@@ -171,23 +171,32 @@ if ($api.Ok) {
 }
 
 # ---------------------------------------------------------------------------
-# 4 — api readiness (every dependency, from inside the process)
+# 4 -- api readiness (every dependency, from inside the process)
 # ---------------------------------------------------------------------------
 $deepDetails = @()
 if ($api.Ok) {
     $deep = Test-HttpEndpoint -Url "$apiUrl/health/deep" -TimeoutSeconds ($TimeoutSeconds * 2)
     if ($deep.Ok) {
         try {
-            $body = $deep.Body | ConvertFrom-Json
+            # /health/deep carries 40 analyzer descriptors, which can exceed
+            # ConvertFrom-Json's inherited MaxJsonLength on PS 5.1.
+            $body = ConvertFrom-JsonSafe $deep.Body
+            if ($null -eq $body) { throw 'response was not parseable JSON' }
+            $components = Get-JsonValue $body 'components'
+            if ($null -eq $components) { throw 'response had no components object' }
+
             $bad = @()
-            foreach ($prop in $body.components.PSObject.Properties) {
-                if (-not $prop.Value.ok) { $bad += $prop.Name }
+            foreach ($name in @($components.Keys)) {
+                $value = $components[$name]
+                $componentOk = [bool](Get-JsonValue $value 'ok')
+                if (-not $componentOk) { $bad += $name }
+                $rawDetail = Get-JsonValue $value 'detail'
                 $deepDetails += [pscustomobject]@{
-                    Component = "  · $($prop.Name)"
-                    Status    = if ($prop.Value.ok) { 'OK' } else { 'FAIL' }
-                    LatencyMs = [int]($prop.Value.latencyMs)
-                    Detail    = ($prop.Value.detail | ConvertTo-Json -Compress -Depth 3)
-                    Ok        = [bool]$prop.Value.ok
+                    Component = "  - $name"
+                    Status    = if ($componentOk) { 'OK' } else { 'FAIL' }
+                    LatencyMs = [int](Get-JsonValue $value 'latencyMs')
+                    Detail    = if ($null -eq $rawDetail) { '' } else { ($rawDetail | ConvertTo-Json -Compress -Depth 4) }
+                    Ok        = $componentOk
                     Required  = $true
                 }
             }
@@ -206,11 +215,11 @@ if ($api.Ok) {
             -Detail (Format-ProbeError $deep)
     }
 } else {
-    Add-Check -Component 'api-deep' -Ok $false -Detail 'skipped — api liveness failed'
+    Add-Check -Component 'api-deep' -Ok $false -Detail 'skipped -- api liveness failed'
 }
 
 # ---------------------------------------------------------------------------
-# 5 — web console
+# 5 -- web console
 # ---------------------------------------------------------------------------
 if (-not $SkipWeb) {
     $web = Test-HttpEndpoint -Url "$webUrl/" -TimeoutSeconds $TimeoutSeconds
@@ -223,21 +232,31 @@ if (-not $SkipWeb) {
 }
 
 # ---------------------------------------------------------------------------
-# 6 — PM2 supervision
+# 6 -- PM2 supervision
 # ---------------------------------------------------------------------------
 $pm2 = Get-Pm2Command
 if ($pm2) {
     try {
-        $list = (& $pm2 jlist 2>&1 | Out-String) | ConvertFrom-Json
+        # ConvertFrom-JsonSafe, not ConvertFrom-Json: pm2_env embeds the Windows
+        # environment block, which contains both 'username' and 'USERNAME'.
+        # The built-in cmdlet folds keys case-insensitively and throws on them.
+        $list = ConvertFrom-JsonSafe ((& $pm2 jlist 2>&1 | Out-String))
+        if ($null -eq $list) { throw 'pm2 jlist returned no parseable JSON' }
+
         $expected = if ($SkipWeb) { $BrandLensProcesses | Where-Object { $_ -ne 'brandlens-web' } } else { $BrandLensProcesses }
         $offline = @()
-        foreach ($name in $expected) {
-            $proc = $list | Where-Object { $_.name -eq $name } | Select-Object -First 1
-            if (-not $proc) { $offline += "$name (absent)" }
-            elseif ($proc.pm2_env.status -ne 'online') { $offline += "$name ($($proc.pm2_env.status))" }
+        $flapping = @()
+        foreach ($proc in $list) {
+            $procName = Get-JsonValue $proc 'name'
+            $restarts = Get-JsonValue $proc 'pm2_env' 'restart_time'
+            if ($restarts -ge 5) { $flapping += "$procName x$restarts" }
         }
-        $flapping = @($list | Where-Object { $_.pm2_env.restart_time -ge 5 } |
-                ForEach-Object { "$($_.name) x$($_.pm2_env.restart_time)" })
+        foreach ($name in $expected) {
+            $proc = $list | Where-Object { (Get-JsonValue $_ 'name') -eq $name } | Select-Object -First 1
+            if (-not $proc) { $offline += "$name (absent)"; continue }
+            $procStatus = Get-JsonValue $proc 'pm2_env' 'status'
+            if ($procStatus -ne 'online') { $offline += "$name ($procStatus)" }
+        }
         $detail = if ($offline.Count) { $offline -join ', ' } else { "$($expected.Count) online" }
         if ($flapping.Count) { $detail += "; restarts: $($flapping -join ', ')" }
         Add-Check -Component 'pm2' -Ok ($offline.Count -eq 0) -Detail $detail
@@ -291,7 +310,7 @@ foreach ($check in $failed) {
 }
 Write-Host ''
 Write-Hint @(
-    'Triage order — each layer depends on the ones above it:',
+    'Triage order -- each layer depends on the ones above it:',
     '  1. database   Get-Service postgresql* ; .\setup-database.ps1 -SkipSeed',
     '  2. engine     .\logs.ps1 -Process engine -Errors ; check apps\engine\.venv',
     '  3. api        .\logs.ps1 -Process api -Errors ; confirm DATABASE_URL in .env',

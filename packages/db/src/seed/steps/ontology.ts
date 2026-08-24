@@ -48,6 +48,8 @@ import {
   SEED_VOICE,
 } from '../data/brand.js';
 import { SEED_RULES, SEED_SCORING_CONFIG, type SeedRule } from '../data/rules.js';
+import { assertSeedRulesExecutable } from '../data/validate.js';
+import { inheritedCompileRows } from './rule-packs.js';
 import { USERS } from './tenant.js';
 
 export interface OntologyResult {
@@ -65,6 +67,9 @@ export interface OntologyResult {
   disclaimerIdByKey: Map<string, string>;
   documentId: string;
 }
+
+/** Fixed so the compiled snapshot is byte-identical on every re-seed. */
+const COMPILED_AT = new Date('2026-03-01T00:00:00Z');
 
 const BRAND_SLUG = 'northwind';
 const RESERVE_SLUG = 'northwind-reserve';
@@ -440,6 +445,12 @@ export async function seedOntology(tx: Database, orgId: string): Promise<Ontolog
   /* ------------------------------------------------------------------ *
    * Rules
    * ------------------------------------------------------------------ */
+  // Before a single row: does every rule's `check.params` name keys the
+  // analyzer actually reads? A key it does not read is not an error at check
+  // time — the analyzer takes its default — so the rule would display one
+  // threshold and enforce another, for as long as nobody read the Python.
+  assertSeedRulesExecutable();
+
   const ruleIdByKey = new Map<string, string>();
   const ruleVersionByKey = new Map<string, number>();
 
@@ -499,7 +510,21 @@ export async function seedOntology(tx: Database, orgId: string): Promise<Ontolog
    * same algorithm. If either drifted, republishing an unchanged ruleset
    * would mint a new version and invalidate every cached verdict.
    * ------------------------------------------------------------------ */
-  const compiledRules = activeRules
+  // Both lists go in together, exactly as the API's compile does. The loser of
+  // a key collision is NOT filtered out here: the compiled snapshot records
+  // everything that was considered, and resolution picks a winner per asset —
+  // a baseline rule the brand overrode is precisely what an auditor asks to
+  // see. Northwind overrides several, which is what makes that visible in the
+  // demo rather than only in a test.
+  const compiledRules = [
+    ...activeRules.map((r) => ({ ...r, origin: 'brand' as const, packKey: null as string | null })),
+    ...inheritedCompileRows(COMPILED_AT).map((r) => ({
+      ...r,
+      // The seed writes rules with `specificity` already computed; inherited
+      // rows carry an empty scope, so theirs is the empty-scope value.
+      specificity: computeSpecificity(r.scope),
+    })),
+  ]
     .map((r) => ({
       id: r.id,
       key: r.key,
@@ -521,7 +546,9 @@ export async function seedOntology(tx: Database, orgId: string): Promise<Ontolog
       autoRouteToHuman: Boolean(
         (r.calibration as { autoRouteToHuman?: boolean } | null)?.autoRouteToHuman,
       ),
-      createdAt: new Date('2026-03-01T00:00:00Z').toISOString(),
+      origin: r.origin,
+      packKey: r.packKey,
+      createdAt: COMPILED_AT.toISOString(),
     }))
     .sort((a, b) => a.key.localeCompare(b.key) || a.version - b.version);
 

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from rapidfuzz import fuzz, process
 
+from .channel_spec import legal_font_floor_pt, resolve_spec
 from .models import RuleDefinition, TypeStyle, build_result
 from .structured import TextElement, normalize_font_name
 
@@ -232,6 +233,16 @@ def check_min_size(ctx: AnalysisContext, rule: RuleDefinition) -> CriterionResul
     canvas_h = float(ctx.asset.height or (ctx.image().height if ctx.image() else 0) or 0)
     dpi = ctx.dpi
 
+    # The placement has a floor of its own, and it is not the brand's: a 320x50
+    # mobile banner is 50 pixels tall, and legal copy set to the brand's 8pt
+    # small-print minimum is unreadable on it. Where both apply the larger
+    # wins, because each was set for a reason and neither is a preference.
+    spec, spec_key = resolve_spec(ctx.brand.channel_spec, ctx.asset.channel, ctx.asset.asset_type)
+    channel = legal_font_floor_pt(spec, dpi)
+    channel_floor, channel_basis = channel if channel else (None, "")
+    if channel_floor is not None:
+        channel_basis = f"{channel_basis} ({spec_key})"
+
     offenders: list[dict[str, object]] = []
     smallest: tuple[float, TextElement] | None = None
     for el in elements:
@@ -240,16 +251,19 @@ def check_min_size(ctx: AnalysisContext, rule: RuleDefinition) -> CriterionResul
         if smallest is None or el.font_size_pt < smallest[0]:
             smallest = (el.font_size_pt, el)
 
+        floor, basis = None, ""
         if explicit_floor is not None:
             floor, basis = float(explicit_floor), "rule.params.minSizePt"
         else:
             match = resolve_family(el.font_family, styles)
-            if match.style is None:
-                continue
-            resolved, basis = effective_min_size_pt(match.style, canvas_h, dpi)
-            if resolved is None:
-                continue
-            floor = resolved
+            if match.style is not None:
+                resolved, style_basis = effective_min_size_pt(match.style, canvas_h, dpi)
+                if resolved is not None:
+                    floor, basis = resolved, style_basis
+        if channel_floor is not None and (floor is None or channel_floor > floor):
+            floor, basis = channel_floor, channel_basis
+        if floor is None:
+            continue
         if el.font_size_pt + 1e-6 < floor:
             offenders.append(
                 {
@@ -271,18 +285,24 @@ def check_min_size(ctx: AnalysisContext, rule: RuleDefinition) -> CriterionResul
     }
     thresholds = {
         "minSizePt": explicit_floor,
+        "channelFloorPt": round(channel_floor, 2) if channel_floor is not None else None,
+        "channelFloorBasis": channel_basis or None,
         "perStyle": {
             s.name: effective_min_size_pt(s, canvas_h, dpi)[0] for s in styles
         },
     }
 
-    if explicit_floor is None and not any(v is not None for v in thresholds["perStyle"].values()):  # type: ignore[union-attr]
+    no_style_floor = not any(v is not None for v in thresholds["perStyle"].values())  # type: ignore[union-attr]
+    if explicit_floor is None and channel_floor is None and no_style_floor:
         return build_result(
             rule,
             "not_applicable",
             measured=measured,
             threshold=thresholds,
-            observation="No size floor is defined on the rule or on any approved type style.",
+            observation=(
+                "No size floor is defined on the rule, on any approved type style, or in the channel "
+                "spec for this asset's placement."
+            ),
         )
     if offenders:
         worst = min(offenders, key=lambda o: float(o["sizePt"]))  # type: ignore[arg-type]

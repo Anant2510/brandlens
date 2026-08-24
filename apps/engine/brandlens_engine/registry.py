@@ -68,6 +68,10 @@ ANALYZERS: dict[str, Analyzer] = {
     # -- channel spec ---------------------------------------------------------
     "channel_spec.conformance": channel_spec.check_conformance,
     # -- T2 judge -------------------------------------------------------------
+    # The generic one: the rule's own rubric is the criterion. Everything else
+    # here asks a question this file chose; this asks the question the brand
+    # wrote, which is what lets a semantic rule ship without an engine deploy.
+    "vlm.rubric": judge.check_rubric,
     "vlm.voice_tone": judge.check_voice_tone,
     "vlm.mood": judge.check_mood,
     "vlm.subject_appropriateness": judge.check_subject_appropriateness,
@@ -115,6 +119,7 @@ ANALYZER_TIERS: dict[str, CheckTier] = {
     "accessibility.font_size_floor": "deterministic",
     "accessibility.alt_text": "deterministic",
     "channel_spec.conformance": "deterministic",
+    "vlm.rubric": "vlm",
     "vlm.voice_tone": "vlm",
     "vlm.mood": "vlm",
     "vlm.subject_appropriateness": "vlm",

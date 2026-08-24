@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Creates the analysis engine's virtualenv and installs its dependencies.
@@ -10,7 +10,7 @@
     happens to be first on it.
 
     Every dependency in requirements.txt resolves to a prebuilt win_amd64
-    wheel — nothing compiles, so no Visual C++ Build Tools are needed. If pip
+    wheel -- nothing compiles, so no Visual C++ Build Tools are needed. If pip
     ever starts building from source on this machine, that is a bug in the
     pin, not something to fix by installing a compiler.
 
@@ -18,7 +18,7 @@
     changed requirements.txt is picked up.
 
 .PARAMETER Recreate
-    Delete and rebuild the virtualenv. Use after a Python upgrade — a venv
+    Delete and rebuild the virtualenv. Use after a Python upgrade -- a venv
     keeps a hard reference to the interpreter that created it and silently
     breaks when that interpreter is replaced.
 
@@ -58,7 +58,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 
-Write-Banner 'BrandLens · python engine setup'
+Write-Banner 'BrandLens - python engine setup'
 
 $engineDir = Get-BrandLensPath 'apps' 'engine'
 $venvDir = Join-Path $engineDir '.venv'
@@ -109,7 +109,7 @@ $baseVersion = Get-CommandVersion -Command $basePython -Arguments @('--version')
 Write-Ok "$baseVersion  ($basePython)"
 
 # ---------------------------------------------------------------------------
-# Architecture check — a 32-bit interpreter cannot install the CV wheels.
+# Architecture check -- a 32-bit interpreter cannot install the CV wheels.
 # ---------------------------------------------------------------------------
 Write-Step 'architecture'
 $arch = (& $basePython -c "import struct,sys; print(struct.calcsize('P')*8)" 2>&1 | Out-String).Trim()
@@ -144,7 +144,7 @@ if (Test-Path $venvPython) {
     } catch {
         Write-Fail $_.Exception.Message
         Write-Hint @(
-            'If venv is missing, the Python install was partial — repair it via',
+            'If venv is missing, the Python install was partial -- repair it via',
             'Settings > Apps > Python > Modify, and tick "pip" and "tcl/tk".',
             'If the path is very long, move the checkout nearer the drive root:',
             'the .venv adds ~120 characters and can trip MAX_PATH.'
@@ -211,7 +211,7 @@ function Install-Requirements {
         Write-Fail $_.Exception.Message
         Write-Hint @(
             'If pip tried to BUILD a package rather than download a wheel, the pin no',
-            'longer resolves to a win_amd64 wheel. Do not install a compiler — pin the',
+            'longer resolves to a win_amd64 wheel. Do not install a compiler -- pin the',
             'previous version instead and open an issue.',
             'Behind a corporate proxy, set:  $env:HTTPS_PROXY / $env:HTTP_PROXY',
             'or configure pip:  pip config set global.index-url <internal mirror>'
@@ -227,7 +227,7 @@ if ($IncludeDev -and (Test-Path $requirementsDev)) {
 }
 
 # ---------------------------------------------------------------------------
-# Import verification — the thing that actually proves the install works.
+# Import verification -- the thing that actually proves the install works.
 # A wheel can install cleanly and still fail to import (opencv missing a
 # runtime DLL is the classic), and finding that out at the first check request
 # is far worse than finding it out here.
@@ -278,7 +278,7 @@ if ($PSCmdlet.ShouldProcess('engine dependencies', 'import probe')) {
 }
 
 # ---------------------------------------------------------------------------
-# App import — catches a broken engine package, not just broken dependencies.
+# App import -- catches a broken engine package, not just broken dependencies.
 # ---------------------------------------------------------------------------
 Write-Step 'verify engine'
 if ($PSCmdlet.ShouldProcess('brandlens_engine', 'import probe')) {

@@ -12,6 +12,12 @@ export const EVENT_TYPES = [
   'ruleset.published',
   'rule.proposed',
   'rule.activated',
+  // Forking and pack enablement both change the compiled ruleset, so anything
+  // holding a ruleset hash has to hear about them the same way it hears about
+  // an activation.
+  'rule.forked',
+  'rule_pack.enabled',
+  'rule_pack.disabled',
   'check.started',
   'check.completed',
   'check.failed',

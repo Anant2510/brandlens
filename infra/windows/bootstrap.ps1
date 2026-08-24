@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
@@ -11,12 +11,12 @@
         Node.js 20+      control plane, worker, console
         pnpm             workspace package manager (via corepack)
         Python 3.11+     analysis engine
-        PostgreSQL 16/17 database AND job queue (pg-boss) — no Redis
+        PostgreSQL 16/17 database AND job queue (pg-boss) -- no Redis
         PM2              process manager, later installed as a Windows service
         Caddy            optional reverse proxy with automatic HTTPS
 
     The script is idempotent: anything already present and new enough is left
-    strictly alone. It never partially configures the machine — each component
+    strictly alone. It never partially configures the machine -- each component
     is installed and then re-verified before the next one is attempted, and a
     failure reports exactly what to do by hand.
 
@@ -25,7 +25,7 @@
     This is the mode to use from a scheduled task or a CI smoke check.
 
 .PARAMETER IncludeCaddy
-    Also install Caddy. Off by default — the reverse proxy is optional and many
+    Also install Caddy. Off by default -- the reverse proxy is optional and many
     installs sit behind an existing IIS/ARR or a corporate load balancer.
 
 .PARAMETER SkipPostgres
@@ -129,7 +129,7 @@ function Install-WithWinget {
     param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][string]$Name)
 
     if ($PSCmdlet.ShouldProcess($Name, "winget install $Id")) {
-        Write-Info "installing $Name via winget ($Id) — this can take several minutes"
+        Write-Info "installing $Name via winget ($Id) -- this can take several minutes"
         $args = @(
             'install', '--id', $Id, '--exact', '--silent',
             '--accept-package-agreements', '--accept-source-agreements',
@@ -204,6 +204,40 @@ function Resolve-Component {
         return $true
     }
 
+    # PostgreSQL is a special case, and a predictable one: the EnterpriseDB
+    # installer does NOT put its bin directory on PATH. That is not a refresh
+    # problem and no amount of reopening the shell fixes it -- so rather than
+    # sending the operator away to restart for nothing, find the install and
+    # repair PATH ourselves, for this session and for the machine.
+    if ($Req.Name -eq 'PostgreSQL') {
+        $binDirs = Get-ChildItem 'C:\Program Files\PostgreSQL' -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName 'bin' } |
+            Where-Object { Test-Path (Join-Path $_ 'psql.exe') }
+
+        if ($binDirs) {
+            $bin = @($binDirs)[0]
+            $env:Path = "$env:Path;$bin"
+
+            $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+            if ($machinePath -notlike "*$bin*") {
+                try {
+                    [Environment]::SetEnvironmentVariable('Path', "$machinePath;$bin", 'Machine')
+                    Write-Ok "added to PATH: $bin"
+                } catch {
+                    Write-Warn "could not write the machine PATH: $($_.Exception.Message)"
+                }
+            }
+
+            $version = Get-CommandVersion -Command $Req.Command -Arguments $Req.Args
+            if ($version -and (Compare-Version $version $Req.Minimum)) {
+                Write-Ok "$version"
+                Add-Result $Req.Name 'installed' $version
+                return $true
+            }
+        }
+    }
+
     # Installed but not visible: almost always a PATH refresh that needs a new
     # shell. Say so explicitly rather than reporting a bare failure.
     Write-Fail "$($Req.Name) installed but is not on PATH in this session."
@@ -219,7 +253,7 @@ function Resolve-Component {
 # Run
 # ===========================================================================
 
-Write-Banner 'BrandLens · bootstrap' "repo: $(Get-BrandLensRoot)"
+Write-Banner 'BrandLens - bootstrap' "repo: $(Get-BrandLensRoot)"
 
 if ($SkipInstall) { Write-Info 'verify-only mode: nothing will be installed' }
 
@@ -231,7 +265,7 @@ $wingetAvailable = Test-WingetAvailable
 if ($wingetAvailable) {
     Write-Ok (Get-CommandVersion -Command 'winget' -Arguments @('--version'))
 } else {
-    Write-Warn 'not available — automatic installs are disabled'
+    Write-Warn 'not available -- automatic installs are disabled'
     Write-Hint @(
         'winget ships with App Installer. On Windows Server it is usually absent.',
         'Either install App Installer from the Microsoft Store, or install each',
@@ -314,7 +348,7 @@ if ($pm2Version) {
         $allOk = $false
     }
 } else {
-    Write-Fail 'npm is unavailable — install Node.js first'
+    Write-Fail 'npm is unavailable -- install Node.js first'
     Add-Result 'PM2' 'failed' 'no npm'
     $allOk = $false
 }
@@ -326,7 +360,7 @@ if ($caddyVersion) {
     Write-Ok $caddyVersion
     Add-Result 'Caddy' 'ok' $caddyVersion
 } elseif (-not $IncludeCaddy) {
-    Write-Skip 'optional — pass -IncludeCaddy to install'
+    Write-Skip 'optional -- pass -IncludeCaddy to install'
     Add-Result 'Caddy' 'skipped' 'optional'
 } elseif ($SkipInstall) {
     Write-Warn 'not found'
@@ -350,7 +384,7 @@ if ($caddyVersion) {
 } else {
     Write-Warn 'winget unavailable'
     Write-Hint @(
-        'Caddy is a single .exe — download caddy_windows_amd64.zip from',
+        'Caddy is a single .exe -- download caddy_windows_amd64.zip from',
         '  https://github.com/caddyserver/caddy/releases'
     )
     Add-Result 'Caddy' 'manual' 'download the .exe'

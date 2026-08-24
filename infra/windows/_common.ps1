@@ -1,5 +1,5 @@
-# ============================================================================
-# BrandLens · shared PowerShell helpers
+﻿# ============================================================================
+# BrandLens - shared PowerShell helpers
 #
 # Dot-sourced by every script in this folder:
 #     . (Join-Path $PSScriptRoot '_common.ps1')
@@ -96,7 +96,7 @@ function Write-Info {
 function Write-Hint {
     <#
     .SYNOPSIS
-        An indented, actionable next step. Used on every failure path — an
+        An indented, actionable next step. Used on every failure path -- an
         error the operator cannot act on is not an error message.
     #>
     param([string[]]$Lines)
@@ -109,7 +109,7 @@ function Write-TableBlock {
         Renders objects as a table. Works when there is no console.
     .DESCRIPTION
         `Format-Table -AutoSize | Out-String` silently produces an EMPTY string
-        when the host has no console width to measure — which is exactly the
+        when the host has no console width to measure -- which is exactly the
         case under a Windows scheduled task, a CI runner, or any redirected
         pipeline. Since healthcheck.ps1 and backup.ps1 are meant to be run from
         schtasks, that failure would make their most useful output vanish
@@ -153,7 +153,7 @@ function Get-CommandVersion {
     .SYNOPSIS
         Runs `<cmd> <args>` and returns the first version-looking token, or $null.
     .DESCRIPTION
-        Tolerates a missing command, a non-zero exit and stderr chatter — this
+        Tolerates a missing command, a non-zero exit and stderr chatter -- this
         is used for *detection*, where "not installed" is a normal answer.
     #>
     param(
@@ -200,7 +200,7 @@ function Update-SessionPath {
         Re-reads PATH from the registry into the current process.
     .DESCRIPTION
         winget installs a tool and updates the machine PATH, but the running
-        PowerShell process keeps its stale copy — which is why "I just
+        PowerShell process keeps its stale copy -- which is why "I just
         installed node and it says node is not recognised" is the single most
         common bootstrap complaint. Calling this after each install fixes it
         without asking the operator to open a new window.
@@ -349,14 +349,108 @@ function Test-TcpPort {
 # External processes
 # ---------------------------------------------------------------------------
 
+function ConvertFrom-JsonSafe {
+    <#
+    .SYNOPSIS
+        Parses JSON without the two ways ConvertFrom-Json fails on Windows.
+    .DESCRIPTION
+        Windows PowerShell 5.1's ConvertFrom-Json breaks on payloads this
+        project produces every day:
+
+          * DUPLICATE KEYS DIFFERING ONLY IN CASE. The cmdlet folds keys
+            case-insensitively, so a Windows environment block containing both
+            'username' and 'USERNAME' -- which is exactly what `pm2 jlist`
+            embeds under pm2_env -- throws
+            "contains the duplicated keys 'username' and 'USERNAME'".
+
+          * LARGE PAYLOADS. It inherits JavaScriptSerializer's default
+            MaxJsonLength, and /health/deep carries 40 analyzer descriptors.
+
+        JavaScriptSerializer.DeserializeObject compares keys ordinally and
+        takes a configurable length limit, so it survives both. It returns
+        Dictionary<string,object> and object[] rather than PSCustomObject, so
+        callers index with ['key'] instead of .key -- a deliberate trade:
+        dictionary lookups are case-sensitive, which is the whole point.
+
+        Returns $null on unparseable input rather than throwing, so a health
+        check reports a bad payload instead of dying on it.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string]$Json)
+
+    if ([string]::IsNullOrWhiteSpace($Json)) { return $null }
+
+    # Path 1 -- Windows PowerShell 5.1, which is what the VM runs.
+    # System.Web.Extensions ships with .NET Framework only; it is absent on
+    # .NET Core, so this silently declines on pwsh 7 and Linux.
+    try {
+        Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
+        $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        $serializer.MaxJsonLength = [int]::MaxValue
+        $serializer.RecursionLimit = 256
+        return $serializer.DeserializeObject($Json)
+    } catch { }
+
+    # Path 2 -- PowerShell 6+. -AsHashtable is precisely what the built-in
+    # error message recommends for case-clashing keys, and it returns
+    # IDictionary, so Get-JsonValue indexes it the same way.
+    try {
+        return $Json | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    } catch { }
+
+    # Path 3 -- last resort. Fails on case-clashing keys, which is why it is
+    # last, but it is better than returning nothing for ordinary payloads.
+    try {
+        return $Json | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return $null
+    }
+}
+
+function Get-JsonValue {
+    <#
+    .SYNOPSIS
+        Safe nested lookup into a ConvertFrom-JsonSafe result.
+    .EXAMPLE
+        Get-JsonValue $parsed 'components' 'engine' 'ok'
+    #>
+    param(
+        [Parameter(Mandatory, Position = 0)][AllowNull()]$Object,
+        [Parameter(ValueFromRemainingArguments)][string[]]$Path
+    )
+    $current = $Object
+    foreach ($key in $Path) {
+        if ($null -eq $current) { return $null }
+        if ($current -is [System.Collections.IDictionary]) {
+            if (-not $current.Contains($key)) { return $null }
+            $current = $current[$key]
+        } else {
+            return $null
+        }
+    }
+    return $current
+}
+
 function Invoke-Checked {
     <#
     .SYNOPSIS
         Runs a native command and throws with the captured output on failure.
     .DESCRIPTION
-        `$ErrorActionPreference = 'Stop'` does not apply to native executables
-        — a failing pnpm returns 1 and the script sails on. Every external call
-        in these scripts goes through here so that cannot happen.
+        `$ErrorActionPreference = 'Stop'` does not stop a native executable that
+        returns a non-zero EXIT CODE -- a failing pnpm returns 1 and the script
+        sails on. Every external call goes through here so that cannot happen.
+
+        The opposite trap is worse, and it bit us on a real VM. With
+        `$ErrorActionPreference = 'Stop'` in force, `2>&1` turns anything a
+        native command writes to STDERR into a terminating NativeCommandError,
+        regardless of its exit code. npm writes `npm notice` to stderr on a
+        perfectly successful install; Node writes DeprecationWarnings there too.
+        Both were reported as fatal, so bootstrap.ps1 declared PM2 and
+        `pnpm install` failed when both had in fact succeeded -- and the "error"
+        shown to the operator was a harmless notice, which is about as
+        misleading as a failure message can be.
+
+        Success is therefore judged by EXIT CODE ONLY. stderr is captured for
+        the message and is never, by itself, treated as failure.
     #>
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -370,15 +464,31 @@ function Invoke-Checked {
         $previous = (Get-Location).Path
         Set-Location -LiteralPath $WorkingDirectory
     }
+    $previousEap = $ErrorActionPreference
     try {
+        # Continue, not Stop: see the note above. A native command writing to
+        # stderr must not abort the pipeline before we can read its exit code.
+        $ErrorActionPreference = 'Continue'
         $output = & $FilePath @ArgumentList 2>&1 | Out-String
         $code = $LASTEXITCODE
+        $ErrorActionPreference = $previousEap
+
         if ($code -ne 0) {
             $label = if ($Context) { $Context } else { "$FilePath $($ArgumentList -join ' ')" }
-            throw "$label failed with exit code $code`n$output"
+            # Show the TAIL of the output. The real error is at the end; the head
+            # is npm's banner and assorted notices, which is exactly what made
+            # the original failure message useless.
+            # @() is load-bearing: Where-Object returns a SCALAR when exactly one
+            # line survives, and a scalar string has no .Count -- so the error
+            # path would itself throw, replacing a useful message with
+            # "The property 'Count' cannot be found on this object."
+            $lines = @(($output -split "`r?`n") | Where-Object { $_.Trim() })
+            $tail = if ($lines.Count -gt 20) { $lines[-20..-1] -join "`n" } else { $lines -join "`n" }
+            throw "$label failed with exit code $code`n$tail"
         }
         if ($PassThru) { return $output }
     } finally {
+        $ErrorActionPreference = $previousEap
         if ($previous) { Set-Location -LiteralPath $previous }
     }
 }

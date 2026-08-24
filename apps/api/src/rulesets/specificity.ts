@@ -91,16 +91,33 @@ export interface ResolvableRule {
   version: number;
   scope?: ScopeSelector | null;
   specificity?: number | null;
+  /**
+   * Who owns the rule. `brand` is the tenant's own; `inherited` came from a
+   * shipped rule pack.
+   *
+   * This is a SEPARATE tier from specificity on purpose. A baseline rule and
+   * a brand's override of it both carry an empty scope, so both compute
+   * specificity 0 — leaving the winner to be decided by version and
+   * timestamp, which is arbitrary. A brand's own rule must beat the shipped
+   * default every time, whenever it was written.
+   */
+  origin?: 'brand' | 'inherited' | null;
   /** Tie-break of last resort, so resolution is deterministic across runs. */
   createdAt?: Date | string | null;
   status?: string;
 }
 
+/** Brand-owned sorts before inherited. Unset is treated as brand-owned, so
+ *  every rule written before packs existed keeps its previous precedence. */
+function originRank(origin: ResolvableRule['origin']): number {
+  return origin === 'inherited' ? 1 : 0;
+}
+
 /**
  * Most-specific-wins resolution over a rule key.
  *
- * Ordering within a key: specificity desc, then version desc, then createdAt
- * desc, then id/key ordering. Every tier is needed — two rules can legitimately
+ * Ordering within a key: specificity desc, then brand-owned before inherited,
+ * then version desc, then createdAt desc, then key ordering. Every tier is needed — two rules can legitimately
  * share a specificity (`markets:['de-DE']` vs `markets:['fr-FR']` both = 10),
  * and without a total order the compiled snapshot would depend on the row
  * order Postgres happened to return, which would change the ruleset hash and
@@ -123,6 +140,13 @@ export function compareRules(a: ResolvableRule, b: ResolvableRule): number {
   const sa = a.specificity ?? computeSpecificity(a.scope);
   const sb = b.specificity ?? computeSpecificity(b.scope);
   if (sa !== sb) return sb - sa;
+
+  // Ownership outranks recency: a brand that forked a baseline rule two years
+  // ago still means it, even after the shipped version was updated yesterday.
+  const oa = originRank(a.origin);
+  const ob = originRank(b.origin);
+  if (oa !== ob) return oa - ob;
+
   if (a.version !== b.version) return b.version - a.version;
   const ta = toTime(a.createdAt);
   const tb = toTime(b.createdAt);

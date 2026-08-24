@@ -1,10 +1,12 @@
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
+  type Database,
   assemblyPlans,
   assets,
   audiencePanels,
   brands,
   briefs,
+  channelSpecs,
   predictions,
   rulesets,
 } from '@brandlens/db';
@@ -48,6 +50,16 @@ export async function assembleBrief(job: AssembleBriefJob): Promise<void> {
       .orderBy(desc(assets.isApprovedExemplar), desc(assets.createdAt))
       .limit(120);
     const brandContext = await buildBrandContext(tx, ctx.storage, job.brandId);
+
+    /*
+     * A brief has MANY targets, and `buildBrandContext` resolves a spec for
+     * one placement — so calling it without options, as this did, left
+     * `channelSpec` null for every assemble run. The visible effect was that a
+     * plan for an A4 print page came out byte-identical to one for a square
+     * feed post: no dimensions, no aspect-ratio scoring, the same layout
+     * boxes. It looked like a plan and discriminated nothing.
+     */
+    brandContext.channelSpec = await resolveTargetSpecs(tx, brief.targets ?? []);
     return { brief, compiled, candidates, brandContext };
   });
 
@@ -83,7 +95,13 @@ export async function assembleBrief(job: AssembleBriefJob): Promise<void> {
         keyMessage: brief.keyMessage,
         audience: brief.audience ?? {},
         mandatories: brief.mandatories ?? [],
-        targets: brief.targets ?? [],
+        // Translated, not passed through: the control plane stores a target as
+        // platform + placement because that is how the spec registry is keyed,
+        // and the engine reads `channel` because that is what a rule's scope
+        // matches on. Handing the raw target over made every placement resolve
+        // to the label `any:image` — so channel-scoped rules applied to none
+        // of them and two different targets produced one identical plan.
+        targets: (brief.targets ?? []).map((t) => withChannel(t as BriefTarget)),
       },
       candidateAssets: await Promise.all(
         candidates.map(async (a) => ({
@@ -288,4 +306,103 @@ async function loadActiveRuleset(
     ruleCount: row.ruleCount,
     hash: row.hash,
   };
+}
+
+
+/* ==========================================================================
+ * Brief targets, and the two vocabularies they sit between.
+ *
+ * A target is stored as `platform` + `placement` because that is how the
+ * channel-spec registry is keyed and how the platforms publish their specs. A
+ * rule is scoped by `channel` because that is how a brand describes where its
+ * creative runs. The two mostly compose — meta/feed is `meta-feed` — and
+ * five of the fifteen shipped placements do not, so the mapping is a column
+ * on `channel_specs` rather than string concatenation.
+ * ========================================================================== */
+
+export interface BriefTarget {
+  platform?: string | null;
+  placement?: string | null;
+  assetType?: string | null;
+  channel?: string | null;
+  market?: string | null;
+  count?: number | null;
+}
+
+/** Cached per assemble run — a brief with six targets need not query six times. */
+let channelByPlacement: Map<string, string> | null = null;
+
+async function loadChannelIndex(tx: Database): Promise<Map<string, string>> {
+  const rows = await tx
+    .select({
+      platform: channelSpecs.platform,
+      placement: channelSpecs.placement,
+      assetType: channelSpecs.assetType,
+      channel: channelSpecs.channel,
+    })
+    .from(channelSpecs);
+
+  const index = new Map<string, string>();
+  for (const row of rows) {
+    if (!row.channel) continue;
+    index.set(`${row.platform}/${row.placement}/${row.assetType}`, row.channel);
+    // Also without the asset type: a brief may target a placement whose spec
+    // is registered for `image` while the brief asks for `video`, and the
+    // channel is a property of the placement either way.
+    index.set(`${row.platform}/${row.placement}`, row.channel);
+  }
+  return index;
+}
+
+/**
+ * The spec map the engine expects: `channel:assetType` -> spec.
+ *
+ * Keyed the way `resolve_spec` looks things up, so a target that names a
+ * placement in the registry gets real dimensions and everything downstream —
+ * aspect-ratio scoring, safe zones, the crop penalty — starts working.
+ */
+async function resolveTargetSpecs(tx: Database, targets: unknown[]): Promise<Record<string, unknown>> {
+  const list = targets as BriefTarget[];
+  const platforms = [...new Set(list.map((t) => t.platform).filter((p): p is string => Boolean(p)))];
+  if (platforms.length === 0) return {};
+
+  channelByPlacement = await loadChannelIndex(tx);
+
+  const rows = await tx
+    .select({
+      platform: channelSpecs.platform,
+      placement: channelSpecs.placement,
+      assetType: channelSpecs.assetType,
+      channel: channelSpecs.channel,
+      spec: channelSpecs.spec,
+      orgId: channelSpecs.orgId,
+    })
+    .from(channelSpecs)
+    .where(inArray(channelSpecs.platform, platforms))
+    // A tenant override beats the shipped registry row, so it is read last and
+    // wins the assignment below.
+    .orderBy(sql`${channelSpecs.orgId} NULLS FIRST`);
+
+  const out: Record<string, unknown> = {};
+  for (const target of list) {
+    const assetType = target.assetType ?? 'image';
+    const match = rows.find(
+      (r) => r.platform === target.platform && r.placement === target.placement && r.assetType === assetType,
+    );
+    if (!match?.channel) continue;
+    out[`${match.channel}:${assetType}`] = match.spec;
+  }
+  return out;
+}
+
+/** A target with its scope-lattice channel resolved, for the engine. */
+export function withChannel(target: BriefTarget): Record<string, unknown> {
+  const assetType = target.assetType ?? 'image';
+  const key = `${target.platform}/${target.placement}/${assetType}`;
+  const channel =
+    target.channel ??
+    channelByPlacement?.get(key) ??
+    channelByPlacement?.get(`${target.platform}/${target.placement}`) ??
+    null;
+  return { ...target, assetType, channel };
 }

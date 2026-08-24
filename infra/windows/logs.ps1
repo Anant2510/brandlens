@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Tails or searches the BrandLens logs.
@@ -12,7 +12,7 @@
         stream only starts from now.
 
     All four services log JSON lines (pino for Node, structlog for Python), so
-    -Grep is a plain substring match over the raw line — good enough for a
+    -Grep is a plain substring match over the raw line -- good enough for a
     correlation id, a rule key or a check-run uuid, which is what you are
     usually looking for.
 
@@ -70,7 +70,7 @@ if ($Path) {
     exit 0
 }
 
-Write-Banner 'BrandLens · logs' $logDir
+Write-Banner 'BrandLens - logs' $logDir
 
 if (-not (Test-Path $logDir)) {
     Write-Warn "no log directory at $logDir"
@@ -87,12 +87,12 @@ if ($Follow -and -not $Grep) {
         $args = @('logs', '--lines', [string]$Lines)
         if ($Process -ne 'all') { $args = @('logs', "brandlens-$Process", '--lines', [string]$Lines) }
         if ($Errors) { $args += '--err' }
-        Write-Info 'streaming via pm2 — Ctrl-C to stop'
+        Write-Info 'streaming via pm2 -- Ctrl-C to stop'
         Write-Host ''
         & $pm2 @args
         exit 0
     }
-    Write-Warn 'pm2 not found — falling back to file tailing'
+    Write-Warn 'pm2 not found -- falling back to file tailing'
 }
 
 # ---------------------------------------------------------------------------

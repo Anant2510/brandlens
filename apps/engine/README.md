@@ -205,13 +205,13 @@ invented.
 | `contrast.py` | WCAG 2.x luminance and ratio, per-glyph local sampling, APCA Lc (advisory) |
 | `logo.py` | Feature/RANSAC + NCC detection, homography decomposition, clear-space annulus, min size, recolour, placement, occlusion, co-brand order |
 | `typography.py` | Font-name normalisation, RapidFuzz alias resolution, fallback/faux-style detection, size floors, hierarchy, casing |
-| `layout.py` | Ink bbox, margins, safe zones, grid residuals, overlap IoU, advisory text density |
+| `layout.py` | Ink bbox, margins, safe zones (from the placement's published spec when a rule names none), grid residuals, overlap IoU, advisory text density |
 | `imagery.py` | Style features, manifold distance, medium heuristic, pHash reuse |
 | `copy_checks.py` | Aho–Corasick, unicode/OCR normalisation with offset preservation, claims register join, four-way disclaimer check, readability, locale spelling, CTA allowlist |
-| `channel_spec.py` | Declarative spec validation from `brand.channelSpec` |
+| `channel_spec.py` | Registry-vocabulary spec validation: dimensions, ratios, bytes, formats, colour space, and the print set — trim, bleed, total ink coverage from real CMYK separations, crop marks, outlined fonts. `SPEC_KEYS` gives every key a role so none can go unread |
 | `accessibility.py` | Contrast rollup, size floors, alt-text adequacy |
 | `structured.py` | PDF/PPTX/HTML/Figma -> one normalised element tree |
-| `media.py` | Loading, ICC→sRGB, resize/crop/tile, derivative and Set-of-Mark writing |
+| `media.py` | Loading, ICC→sRGB, resize/crop/tile, derivative and Set-of-Mark writing, plus the prepress probes: source colour model, declared resolution, PDF page boxes, CMYK separations |
 | `ocr.py` | `vlm` / `tesseract` / `none` drivers returning spans with bbox + confidence |
 | `embeddings.py` | Provider interface + deterministic SimHash fallback |
 | `judge.py` | The T2 judge and the five `vlm.*` analyzers |

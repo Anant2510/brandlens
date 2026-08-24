@@ -9,7 +9,7 @@
  *
  *   1 check_run          against the off-palette creative, with a real score
  *                        computed by the same aggregation the API uses
- *   39 decision_traces   one per resolved criterion, each with its measured
+ *   33 decision_traces   one per resolved criterion, each with its measured
  *                        value, its threshold and its citation
  *   6 findings           the failures and the abstention
  *   1 review             in `changes_requested`, assigned to the reviewer
@@ -235,36 +235,30 @@ export async function seedChecks(
       },
     },
     {
-      ruleKey: 'color.espresso-cream-dominance',
+      ruleKey: 'color.palette-balance',
       verdict: dominancePasses ? 'pass' : 'fail',
       confidence: 0.94,
       evidence: {
+        // Shares are normalised over the area attributable to brand tokens,
+        // which is what the analyzer reports — the off-palette share is
+        // excluded from the mix and carried separately.
         measured: {
-          espressoCreamRatio: m.espressoCreamSurfaceRatio,
-          copperRatio: m.copperSurfaceRatio,
-          offPaletteRatio: m.offPaletteSurfaceRatio,
+          roleShare: { primary: m.espressoCreamSurfaceRatio, accent: m.copperSurfaceRatio },
+          unattributedShare: m.offPaletteSurfaceRatio,
         },
-        threshold: { minRatio: 0.55 },
+        threshold: { roleRatios: { primary: 0.6, secondary: 0.3, accent: 0.1 }, tolerancePct: 15 },
         observation:
-          `Espresso and Cream together carry ${pct(m.espressoCreamSurfaceRatio)}% of the surface, against a 55% floor induced from the approved corpus.`,
+          `The primary colours carry ${pct(m.espressoCreamSurfaceRatio)}% of the attributable surface, against a 60% target with a 15-point band.`,
       },
-      suggestedFix: 'Recolouring the green bands to Espresso would take this above 95% and resolve it.',
+      suggestedFix: 'Recolouring the green bands to Espresso would bring the mix back inside the band.',
       finding: dominancePasses
         ? undefined
         : {
-        title: `Brand colours carry only ${pct(m.espressoCreamSurfaceRatio)}% of the surface (floor: 55%)`,
+        title: `Palette mix is off: primary carries ${pct(m.espressoCreamSurfaceRatio)}% against a 60% target`,
         detail:
-          'Induced from 52 approved assets at the 10th percentile. This is the distinctiveness rule: the ground is the asset, not the mark.',
+          'Induced from 52 approved assets. This is the distinctiveness rule: the ground is the asset, not the mark.',
         displayConfidence: 0.94,
         isHighConfidence: true,
-      },
-    },
-    {
-      ruleKey: 'color.copper-accent-cap',
-      verdict: 'pass',
-      evidence: {
-        measured: { copperSurfaceRatio: m.copperSurfaceRatio },
-        threshold: { maxRatio: 0.18 },
       },
     },
 
@@ -274,8 +268,8 @@ export async function seedChecks(
       verdict: 'pass',
       confidence: 0.88,
       evidence: {
-        measured: { resolvedFamilies: ['Inter'], coveragePct: 100 },
-        threshold: { allowed: ['Sole Serif Display', 'Inter'], minCoveragePct: 95 },
+        measured: { resolvedFamilies: ['Inter'], runsChecked: 6, violations: [] },
+        threshold: { approvedFamilies: ['Sole Serif Display', 'Inter'], fuzzyThreshold: 88 },
         observation:
           'Closed-set verification against the three approved faces. Rendered candidates matched Inter on every span.',
       },
@@ -283,25 +277,26 @@ export async function seedChecks(
     {
       ruleKey: 'typography.no-fallback-fonts',
       verdict: 'pass',
-      evidence: { measured: { detected: [] }, threshold: { forbidden: ['Times New Roman', 'Calibri', 'Comic Sans MS', 'Papyrus'] } },
-    },
-    {
-      ruleKey: 'typography.body-min-size',
-      verdict: 'pass',
       evidence: {
-        measured: { smallestBodyPx: 28, canvasShortEdgePx: 1080, pctOfCanvas: 0.026 },
-        threshold: { minSizePx: 15, minSizePctOfCanvas: 0.014 },
+        measured: { genericFamilies: [], unembeddedFonts: [], fauxBoldSpans: 0, fauxItalicSpans: 0 },
+        threshold: { signals: ['generic-family', 'unembedded-font', 'synthesised-style'] },
       },
     },
     {
-      ruleKey: 'typography.legal-min-size',
-      verdict: 'not_applicable',
-      evidence: { observation: 'No legal or disclaimer copy was submitted with this asset, and none is required.' },
+      ruleKey: 'typography.min-size',
+      verdict: 'pass',
+      evidence: {
+        // Points, and a floor per style — which is the shape the analyzer
+        // reports, because the floor that applied depends on which style the
+        // run resolved to.
+        measured: { smallestPt: 21, smallestText: 'Roasted in small batches' },
+        threshold: { perStyle: { Display: 36, Headline: 24, Body: 11.25, Caption: 9.75, Legal: 8.25 } },
+      },
     },
     {
-      ruleKey: 'typography.no-faux-styles',
+      ruleKey: 'typography.sentence-case',
       verdict: 'pass',
-      evidence: { measured: { fauxBoldSpans: 0, fauxItalicSpans: 0 }, threshold: { forbidFauxBold: true, forbidFauxItalic: true } },
+      evidence: { measured: { casingCounts: { sentence: 4, upper: 1 }, allCapsRatio: 0.2 }, threshold: { casing: 'sentence', maxAllCapsRatio: 0.15 } },
     },
 
     /* --- layout ---------------------------------------------------- */
@@ -309,30 +304,33 @@ export async function seedChecks(
       ruleKey: 'layout.safe-zone',
       verdict: 'pass',
       evidence: {
-        measured: { placement: 'meta/feed/image', violations: [] },
-        threshold: { safeZones: { top: 0, right: 0, bottom: 0, left: 0 } },
+        measured: { placement: 'meta/feed/image', intrusions: [] },
+        threshold: { insetPct: 5, intrusionToleranceFrac: 0.02 },
         observation: 'Feed images carry no platform chrome overlay, so the safe zone is the full canvas.',
       },
     },
     {
       ruleKey: 'layout.outer-margin',
       verdict: 'pass',
-      evidence: { measured: { minMarginPx: 72 }, threshold: { minMarginPx: 48, minMarginPct: 0.045 } },
+      evidence: { measured: { minMarginPct: 6.7 }, threshold: { minMarginPct: 4.5 } },
     },
     {
       ruleKey: 'layout.grid-alignment',
       verdict: 'pass',
-      evidence: { measured: { elementsOffGrid: 0, elementsChecked: 6 }, threshold: { gridPx: 8, tolerancePx: 2 } },
+      evidence: {
+        measured: { offGridRatio: 0, elementsChecked: 6 },
+        threshold: { columns: 12, tolerancePct: 1, maxOffGridRatio: 0.25 },
+      },
     },
     {
       ruleKey: 'layout.no-element-overlap',
       verdict: 'pass',
-      evidence: { measured: { overlappingPairs: [] }, threshold: { maxOverlapPct: 1 } },
+      evidence: { measured: { overlappingPairs: [], worstIou: 0 }, threshold: { maxIou: 0.01 } },
     },
     {
       ruleKey: 'layout.text-density',
       verdict: 'pass',
-      evidence: { measured: { textAreaPct: 11.4 }, threshold: { maxTextAreaPct: 20 } },
+      evidence: { measured: { occupiedCells: 3, cells: 25 }, threshold: { maxOccupiedCells: 5 } },
     },
 
     /* --- imagery --------------------------------------------------- */
@@ -419,50 +417,60 @@ export async function seedChecks(
       ruleKey: 'accessibility.text-contrast',
       verdict: 'pass',
       evidence: {
-        measured: { minRatio: 9.8, pairsChecked: 5, worstPair: { fg: '#2b1b12', bg: '#f4ede1' } },
-        threshold: { normalRatio: 4.5, largeRatio: 3 },
+        measured: { worstRatio: 9.8, worstRequired: 4.5, runCount: 5, method: 'declared:png' },
+        threshold: { level: 'AA', policy: 'worst-case across runs' },
       },
     },
     {
-      ruleKey: 'accessibility.legal-contrast',
-      verdict: 'not_applicable',
-      evidence: { observation: 'No legal copy on this asset.' },
+      ruleKey: 'accessibility.no-large-text-exemption',
+      verdict: 'pass',
+      evidence: {
+        // The same runs as the AA rule, held to 4.5:1 whatever their size —
+        // which this asset clears comfortably, so the stricter policy costs
+        // it nothing.
+        measured: { worstRatio: 9.8, worstRequired: 4.5, runCount: 5 },
+        threshold: { minRatio: 4.5 },
+      },
     },
     {
       ruleKey: 'accessibility.font-size-floor',
       verdict: 'pass',
-      evidence: { measured: { smallestRenderedPx: 28 }, threshold: { minPx: 11 } },
+      evidence: { measured: { smallestPt: 21 }, threshold: { minSizePt: 8.25 } },
     },
 
     /* --- channel spec ---------------------------------------------- */
     {
-      ruleKey: 'channel.dimensions',
+      ruleKey: 'channel.conformance',
       verdict: 'pass',
       evidence: {
-        measured: { width: 1080, height: 1080, aspectRatio: 1 },
-        threshold: { placement: 'meta/feed/image', aspectRatios: ['1:1', '4:5', '1.91:1'], minWidth: 600 },
-      },
-    },
-    {
-      ruleKey: 'channel.file-size',
-      verdict: 'pass',
-      evidence: {
-        measured: { bytes: subject.byteSize, format: 'png' },
-        threshold: { maxBytes: 31_457_280, formats: ['jpg', 'jpeg', 'png'] },
+        // One validation, one trace. The spec is checked in a single pass, so
+        // splitting it across several criteria would report one measurement
+        // as several independent confirmations.
+        measured: { width: 1080, height: 1080, aspectRatio: 1, bytes: subject.byteSize, format: 'png' },
+        threshold: {
+          spec: 'meta/feed/image',
+          aspectRatio: 1,
+          minWidth: 600,
+          maxFileSizeKb: 30_720,
+          allowedFormats: ['jpg', 'jpeg', 'png'],
+        },
       },
     },
 
     /* --- legal ------------------------------------------------------ */
     {
-      ruleKey: 'legal.claim-registered',
+      ruleKey: 'legal.claims-substantiated',
       verdict: 'fail',
       confidence: 0.91,
       evidence: {
-        measured: { detectedClaim: 'The smoothest cup you will drink', category: 'superlative', matchedClaimId: null, bestMatchScore: 0.31 },
-        threshold: { requireRegistered: true, fuzzyThreshold: 0.88 },
+        // A 0–100 similarity score, matching the analyzer's scale. The old
+        // 0.31-against-0.88 pair read as a probability and would have matched
+        // everything had the threshold ever reached the engine.
+        measured: { detectedClaim: 'The smoothest cup you will drink', category: 'superlative', matchedClaimId: null, bestMatchScore: 31 },
+        threshold: { fuzzyThreshold: 88, registerSize: 6 },
         quotedText: 'The smoothest cup you will drink',
         observation:
-          'A superlative claim with no match in the register. The closest registered claim scores 0.31, well below the 0.88 match threshold.',
+          'A superlative claim with no match in the register. The closest registered claim scores 31, well below the 88 match threshold.',
       },
       suggestedFix:
         'Either register and substantiate the claim, or drop the superlative: "Our smoothest roast" is a description, "the smoothest cup you will drink" is a comparative claim about every other coffee.',
@@ -475,24 +483,9 @@ export async function seedChecks(
       },
     },
     {
-      ruleKey: 'legal.claim-in-date',
-      verdict: 'not_applicable',
-      evidence: { observation: 'No registered claim was matched, so there is no approval date to check.' },
-    },
-    {
-      ruleKey: 'legal.claim-jurisdiction',
-      verdict: 'not_applicable',
-      evidence: { observation: 'No registered claim was matched.' },
-    },
-    {
       ruleKey: 'legal.disclaimer-present',
       verdict: 'not_applicable',
       evidence: { observation: 'No matched claim requires a disclaimer.' },
-    },
-    {
-      ruleKey: 'legal.disclaimer-legible',
-      verdict: 'not_applicable',
-      evidence: { observation: 'No disclaimer is required on this asset.' },
     },
 
     /* --- the holistic pass, last ------------------------------------ */

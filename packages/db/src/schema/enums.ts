@@ -167,6 +167,18 @@ export const briefStatusEnum = pgEnum('brief_status', ['draft', 'planned', 'asse
 export const predictionStatusEnum = pgEnum('prediction_status', ['queued', 'running', 'completed', 'failed']);
 
 /* ------------------------------------------------------------------ *
+ * Rule packs — the standards a brand gets before writing any rules
+ * ------------------------------------------------------------------ */
+export const rulePackCategoryEnum = pgEnum('rule_pack_category', [
+  /** Universal and on by default: legibility, craft, channel conformance. */
+  'baseline',
+  /** Opt-in per brand: financial promotions, health, alcohol, children. */
+  'regulated',
+  /** Catches obviously-wrong creative before a brand has defined anything. */
+  'heuristic',
+]);
+
+/* ------------------------------------------------------------------ *
  * Discovery — URL in, brand ontology out
  * ------------------------------------------------------------------ */
 export const discoveryStatusEnum = pgEnum('discovery_status', [

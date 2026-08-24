@@ -1,18 +1,34 @@
 /* ==========================================================================
  * The rule set for Northwind Coffee Co.
  *
- * 57 rules across all nine dimensions and all four tiers. 42 are `active` and
- * feed the published ruleset; 15 are left `proposed` — a mix of `deductive`
+ * 45 rules across all nine dimensions and all four tiers. 33 are `active` and
+ * feed the published ruleset; 12 are left `proposed` — a mix of `deductive`
  * extractions carrying page + bbox citations and `inductive` proposals
  * carrying their statistical support — so the rule-review screen has real
  * work waiting on first boot.
  *
- * Two things are load-bearing here and neither is decoration:
+ * It was 57 until an audit against the analyzer manifest. Twelve of those were
+ * either duplicates of a rule already here — four channel-spec rules running
+ * the identical single-pass validation, three claim rules walking the register
+ * the same way — or checks no analyzer could perform, like disclaimer
+ * proximity and German expansion headroom. Every one of them displayed a
+ * threshold in the console and enforced something else, or nothing.
+ *
+ * Three things are load-bearing here and none is decoration:
  *
  *   `check.fn` must name an analyzer registered in
  *   apps/engine/brandlens_engine/registry.py. An unknown fn does not crash —
  *   the pipeline reports `insufficient_evidence` with the name in the
  *   observation — but it does mean a criterion that never evaluates.
+ *
+ *   `check.params` keys must be keys that analyzer actually reads. An
+ *   unrecognised key is not an error either: the analyzer falls back to its
+ *   default, so the rule shows a threshold nobody is held to. `validate.ts`
+ *   asserts this against the generated manifest before the seed writes a row,
+ *   and the statements here are written in the units the engine measures in —
+ *   points not pixels, ratios not percentages, height not width — because a
+ *   rule that reads correctly and computes something else is the failure this
+ *   file is most prone to.
  *
  *   `status` starts at `proposed` for everything machine-derived. A rule the
  *   customer has not confirmed must never influence a verdict; that
@@ -81,7 +97,10 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'cv',
     severity: 'blocker',
     weight: 2,
-    check: { fn: 'logo.presence', params: { minSimilarity: 0.82, allowAnyVariant: true } },
+    // `minScore`, not `minSimilarity`. The analyzer's default is 0.0, so a
+    // misnamed key means the weakest possible match satisfies a blocker.
+    // No `requiredVariantIds`: any approved variant counts.
+    check: { fn: 'logo.presence', params: { minScore: 0.82 } },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 8, bbox: [0.08, 0.12, 0.92, 0.34], extractedBy: 'brandbook-extractor@1.0' },
     status: 'active',
@@ -96,35 +115,45 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'cv',
     severity: 'major',
     weight: 1.5,
-    check: { fn: 'logo.clearspace', params: { multiple: 1.35, unit: 'logomark_height', tolerancePx: 2 } },
+    check: { fn: 'logo.clearspace', params: { clearSpaceMultiple: 1.35, basis: 'height' } },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 11, bbox: [0.1, 0.2, 0.9, 0.62], extractedBy: 'brandbook-extractor@1.0' },
     status: 'active',
   },
   {
     key: 'logo.min-size.digital',
-    statement: 'The logo must render at least 120px wide on any digital canvas.',
-    rationale: 'Below 120px the wordmark counters close up at typical mobile pixel densities.',
+    statement: 'The logo must occupy at least 6% of the canvas height on any digital placement.',
+    rationale:
+      'Stated as a share of canvas height because that is what the engine measures — the detected mark’s ' +
+      'height against the canvas. The brand book’s 120px figure is an absolute width and does not survive ' +
+      'a change of canvas size; 6% is the same requirement expressed so it holds on every placement.',
     dimension: 'logo',
     tier: 'cv',
     severity: 'major',
     weight: 1,
     scope: { channels: ['meta-feed', 'meta-story', 'meta-reel', 'tiktok-in-feed', 'linkedin-feed', 'display', 'amazon-a-plus'] },
-    check: { fn: 'logo.min_size', params: { minWidthPx: 120, minWidthPct: 0.08 } },
+    // `minHeightPct`, in PERCENT. The old `minWidthPct: 0.08` was wrong twice:
+    // the analyzer measures height, and it compares against a percentage, so
+    // 0.08 would have meant 0.08% of the canvas rather than 8%.
+    check: { fn: 'logo.min_size', params: { minHeightPct: 6 } },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 12, bbox: [0.12, 0.14, 0.88, 0.4] },
     status: 'active',
   },
   {
     key: 'logo.min-size.print',
-    statement: 'The logo must reproduce at least 25mm wide in print.',
-    rationale: 'Below 25mm the roastery date stamp in the mark fills in on uncoated stock.',
+    statement: 'The logo must reproduce at least 12mm tall in print.',
+    rationale:
+      'Below this the roastery date stamp in the mark fills in on uncoated stock. Stated as height because ' +
+      'the engine measures the detected mark’s height and converts to millimetres using the file’s DPI.',
     dimension: 'logo',
     tier: 'cv',
     severity: 'major',
     weight: 1,
     scope: { channels: ['print-a4', 'print-a5'] },
-    check: { fn: 'logo.min_size', params: { minWidthMm: 25, requireDpi: 300 } },
+    // DPI is not a parameter of this check — it comes from the file, and the
+    // 300dpi requirement is enforced by the channel spec rule instead.
+    check: { fn: 'logo.min_size', params: { minHeightMm: 12 } },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 12, bbox: [0.12, 0.44, 0.88, 0.66] },
     status: 'active',
@@ -138,7 +167,8 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'cv',
     severity: 'blocker',
     weight: 2,
-    check: { fn: 'logo.distortion', params: { maxAspectDeviationPct: 2, maxRotationDeg: 0.5 } },
+    // A ratio, not a percentage: 1.02 is "at most 2% off square".
+    check: { fn: 'logo.distortion', params: { maxAspectDistortion: 1.02, maxRotationDeg: 0.5 } },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 14, bbox: [0.08, 0.1, 0.92, 0.55] },
     status: 'active',
@@ -154,7 +184,7 @@ export const SEED_RULES: SeedRule[] = [
     weight: 1.5,
     check: {
       fn: 'logo.recolor',
-      params: { allowedHex: ['#2B1B12', '#F4EDE1', '#000000', '#FFFFFF'], deltaEThreshold: 6 },
+      params: { allowedHexes: ['#2B1B12', '#F4EDE1', '#000000', '#FFFFFF'], maxDeltaE: 6 },
     },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 15, bbox: [0.1, 0.18, 0.9, 0.72] },
@@ -171,7 +201,10 @@ export const SEED_RULES: SeedRule[] = [
     severity: 'minor',
     weight: 0.5,
     scope: { channels: ['meta-feed', 'meta-story', 'linkedin-feed', 'display'] },
-    check: { fn: 'logo.placement', params: { allowedZones: ['top-left', 'bottom-right'], tolerancePct: 0.06 } },
+    // Anchors, not zones. The analyzer snaps the mark to the nearest of nine
+    // named anchors and checks membership; there is no positional tolerance
+    // to configure because the snap already absorbs it.
+    check: { fn: 'logo.placement', params: { allowedAnchors: ['top-left', 'bottom-right'] } },
     provenance: 'inductive',
     support: { sampleSize: 52, percentile: 90, observedValue: 0.904 },
     // Left proposed: an induced convention is a hypothesis about the brand,
@@ -180,7 +213,7 @@ export const SEED_RULES: SeedRule[] = [
   },
 
   /* =====================================================================
-   * COLOR — 5 rules
+   * COLOR — 4 rules
    * ================================================================== */
   {
     key: 'color.palette-conformance',
@@ -194,7 +227,9 @@ export const SEED_RULES: SeedRule[] = [
     weight: 1.5,
     check: {
       fn: 'color.palette_conformance',
-      params: { deltaEThreshold: 5, minClusterSharePct: 3, clusterCount: 8, ignoreImagery: true },
+      // `minShare` is a FRACTION, not a percentage: the old `minClusterSharePct: 3`
+      // would have meant 300% had the key been read at all.
+      params: { maxDeltaE: 5, minShare: 0.03, k: 8, excludePhotoRegions: true, ignoreNeutrals: true },
     },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 22, bbox: [0.06, 0.1, 0.94, 0.5] },
@@ -209,39 +244,47 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'cv',
     severity: 'blocker',
     weight: 2,
-    check: { fn: 'color.forbidden', params: { deltaEThreshold: 12, minClusterSharePct: 2 } },
+    // The forbidden hexes themselves come from the tokens marked `forbidden`
+    // in the ontology; `forbiddenHexes` here would override them.
+    check: { fn: 'color.forbidden', params: { maxDeltaE: 12, minShare: 0.02 } },
     provenance: 'manual',
     status: 'active',
   },
   {
-    key: 'color.espresso-cream-dominance',
+    /*
+     * One balance rule, not two share rules.
+     *
+     * `color.dominance_ratio` attributes measured area to the nearest token,
+     * groups it by the token's ROLE, normalises, and compares the whole mix
+     * against a declared split. It cannot express "espresso + cream ≥ 55%" or
+     * "copper ≤ 18%" — those name individual tokens and set one-sided bounds,
+     * and it does neither. Two rules pointed at it computed the identical mix
+     * and compared it against two different targets, so at most one of them
+     * could ever have been right.
+     */
+    key: 'color.palette-balance',
     statement:
-      'Espresso and Cream together must account for at least 55% of the non-photographic surface on brand-led creative.',
+      'The brand palette must read roughly 60% primary, 30% secondary, 10% accent by painted area, ' +
+      'excluding photography.',
     rationale:
-      'The distinctiveness asset is the ground, not the mark. Induced from the approved corpus at the 10th percentile.',
+      'The distinctiveness asset is the ground, not the mark: Espresso and Cream carry the surface and ' +
+      'Copper accents it. Induced from the approved corpus, with a wide band because the split shifts ' +
+      'legitimately between a packshot and a promotion.',
     dimension: 'color',
     tier: 'cv',
     severity: 'minor',
     weight: 1,
     check: {
       fn: 'color.dominance_ratio',
-      params: { tokenPaths: ['color.brand.espresso', 'color.brand.cream'], minRatio: 0.55, excludeImagery: true },
+      params: {
+        roleRatios: { primary: 0.6, secondary: 0.3, accent: 0.1 },
+        tolerancePct: 15,
+        maxDeltaE: 8,
+        excludePhotoRegions: true,
+      },
     },
     provenance: 'inductive',
     support: { sampleSize: 52, percentile: 10, observedValue: 0.58 },
-    status: 'active',
-  },
-  {
-    key: 'color.copper-accent-cap',
-    statement: 'Copper must not exceed 18% of the total surface. It is an accent, not a ground.',
-    rationale: 'Copper at scale reads as a warning colour and clashes with the functional palette.',
-    dimension: 'color',
-    tier: 'cv',
-    severity: 'minor',
-    weight: 0.75,
-    check: { fn: 'color.dominance_ratio', params: { tokenPaths: ['color.brand.copper'], maxRatio: 0.18 } },
-    provenance: 'deductive',
-    citation: { doc: BOOK, page: 24, bbox: [0.1, 0.55, 0.9, 0.78] },
     status: 'active',
   },
   {
@@ -256,7 +299,7 @@ export const SEED_RULES: SeedRule[] = [
     brand: 'reserve',
     check: {
       fn: 'color.forbidden',
-      params: { forbiddenHex: ['#C2703D'], deltaEThreshold: 8, reason: 'Copper is not part of the Reserve palette' },
+      params: { forbiddenHexes: ['#C2703D'], maxDeltaE: 8, minShare: 0.02 },
     },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 61, bbox: [0.08, 0.12, 0.92, 0.46] },
@@ -264,7 +307,7 @@ export const SEED_RULES: SeedRule[] = [
   },
 
   /* =====================================================================
-   * TYPOGRAPHY — 6 rules
+   * TYPOGRAPHY — 4 rules
    * ================================================================== */
   {
     key: 'typography.approved-families',
@@ -275,9 +318,13 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'deterministic',
     severity: 'major',
     weight: 1.5,
+    // The approved families live in the ontology's type styles; this check
+    // resolves every rendered run against them. The parameters are the two
+    // knobs it has: how close a name must be to count as a match, and how
+    // much text a run needs before it is worth judging.
     check: {
       fn: 'typography.approved_family',
-      params: { allowFallbackStack: true, minCoveragePct: 95 },
+      params: { fuzzyThreshold: 88, minChars: 3 },
     },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 30, bbox: [0.08, 0.1, 0.92, 0.42] },
@@ -286,76 +333,69 @@ export const SEED_RULES: SeedRule[] = [
   {
     key: 'typography.no-fallback-fonts',
     statement:
-      'Times New Roman, Calibri, Comic Sans MS and Papyrus must never appear. They indicate a substituted or rebuilt file.',
+      'The real cut must be used: no system fallback family, no unembedded font in print artwork, and no ' +
+      'synthesised bold or italic.',
     rationale:
-      'These are not taste objections. Each is a specific renderer fallback, so their presence is evidence of a broken production pipeline.',
+      'Three symptoms of the same failure — the intended font was not available when the file was rendered. ' +
+      'Times New Roman, Calibri and Papyrus are specific renderer fallbacks; faux bold is what a renderer ' +
+      'draws when the real weight is missing. None is a taste objection.',
     dimension: 'typography',
     tier: 'deterministic',
     severity: 'blocker',
     weight: 2,
-    check: { fn: 'typography.fallback_font', params: { severityByFamily: true } },
+    // Takes no parameters: the three signals are intrinsic to the check and
+    // the approved families come from the ontology.
+    check: { fn: 'typography.fallback_font', params: {} },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 31, bbox: [0.1, 0.5, 0.9, 0.72] },
     status: 'active',
   },
   {
-    key: 'typography.body-min-size',
-    statement: 'Body copy must be at least 15px, or 1.4% of the canvas short edge, whichever is larger.',
-    rationale: 'Below that, body copy fails at arm’s length on a phone, which is where most of it is read.',
+    /*
+     * One rule for the whole scale, not one per style.
+     *
+     * `typography.min_size` resolves each rendered run to its approved type
+     * style and applies THAT style's floor — Body 15px, Caption 13px, Legal
+     * 11px, all declared in the ontology. Its only parameter, `minSizePt`, is
+     * a single global floor that replaces every per-style floor at once, so a
+     * "body is 15px" rule written that way would have failed every line of
+     * legal copy on the asset. There is no `styleName` parameter; a per-style
+     * rule cannot be expressed through params and does not need to be.
+     */
+    key: 'typography.min-size',
+    statement: 'Type must not be set below the minimum size declared for its style.',
+    rationale:
+      'Each approved style carries its own floor because they are read at different distances: body copy ' +
+      'at arm’s length on a phone, legal copy under scrutiny or not at all. The absolute floor beneath all ' +
+      'of them is a separate accessibility rule.',
     dimension: 'typography',
     tier: 'deterministic',
     severity: 'major',
     weight: 1,
-    check: { fn: 'typography.min_size', params: { styleName: 'Body', minSizePx: 15, minSizePctOfCanvas: 0.014 } },
+    check: { fn: 'typography.min_size', params: {} },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 33, bbox: [0.1, 0.2, 0.9, 0.5] },
     status: 'active',
   },
   {
-    key: 'typography.legal-min-size',
-    statement: 'Legal and disclaimer copy must be at least 11px on screen and 8pt in print.',
-    rationale:
-      'A disclaimer nobody can read is a disclaimer that was not made. Regulators treat legibility as part of presence.',
-    dimension: 'typography',
-    tier: 'deterministic',
-    severity: 'blocker',
-    weight: 2,
-    check: { fn: 'typography.min_size', params: { styleName: 'Legal', minSizePx: 11, minSizePt: 8 } },
-    provenance: 'transfer',
-    citation: { doc: 'CAP Code s.3.10; FTC .com Disclosures (2013), clear and conspicuous' },
-    status: 'active',
-  },
-  {
-    key: 'typography.no-faux-styles',
-    statement: 'Faux bold and faux italic are forbidden. Use the real weight and the real italic cut.',
-    rationale: 'Synthesised weights distort the letterforms and are trivially detectable in structured sources.',
-    dimension: 'typography',
-    tier: 'deterministic',
-    severity: 'minor',
-    weight: 0.5,
-    check: { fn: 'typography.casing', params: { forbidFauxBold: true, forbidFauxItalic: true } },
-    provenance: 'deductive',
-    citation: { doc: BOOK, page: 34, bbox: [0.12, 0.6, 0.88, 0.8] },
-    status: 'active',
-  },
-  {
     key: 'typography.hierarchy',
-    statement:
-      'A layout must contain at most one Display or H1 element, and no body text may be larger than the smallest heading.',
+    statement: 'Consecutive steps in the type scale must differ by at least 1.25×.',
     rationale:
-      'Two competing headlines is the single most common symptom of a template used as a canvas rather than a template.',
+      'A flattened scale is the single most common symptom of a template used as a canvas. The check ' +
+      'compares the sizes of adjacent ranked styles as they were actually rendered; it counts no headings, ' +
+      'because nothing in the asset says which run was meant to be the H1.',
     dimension: 'typography',
     tier: 'deterministic',
     severity: 'minor',
     weight: 0.75,
-    check: { fn: 'typography.hierarchy', params: { maxPrimaryHeadings: 1, enforceScaleOrder: true } },
+    check: { fn: 'typography.hierarchy', params: { minStepRatio: 1.25 } },
     provenance: 'inductive',
     support: { sampleSize: 52, percentile: 95, observedValue: 1 },
     status: 'proposed',
   },
 
   /* =====================================================================
-   * LAYOUT — 6 rules
+   * LAYOUT — 5 rules
    * ================================================================== */
   {
     key: 'layout.safe-zone',
@@ -366,33 +406,46 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'cv',
     severity: 'blocker',
     weight: 2,
-    check: { fn: 'layout.safe_zone', params: { elements: ['logo', 'headline', 'cta', 'legal'], tolerancePx: 4 } },
+    // `zones` carries explicit per-placement rectangles when the channel spec
+    // supplies them; `insetPct` is the fallback that reserves a uniform band
+    // around all four edges. There is no element filter — anything that
+    // intrudes on a reserved region is an intrusion, whatever it is.
+    check: { fn: 'layout.safe_zone', params: { insetPct: 5, intrusionToleranceFrac: 0.02 } },
     provenance: 'transfer',
     citation: { doc: 'BrandLens channel spec registry 2026.1' },
     status: 'active',
   },
   {
     key: 'layout.outer-margin',
-    statement: 'Outer margins must be at least 48px, or 4.5% of the short edge on canvases below 1080px.',
+    statement: 'Outer margins must be at least 4.5% of the canvas on every edge.',
     rationale: 'Content that touches the edge reads as a crop error and gets clipped by rounded-corner containers.',
     dimension: 'layout',
     tier: 'cv',
     severity: 'minor',
     weight: 0.75,
-    check: { fn: 'layout.margins', params: { minMarginPx: 48, minMarginPct: 0.045 } },
+    // A PERCENTAGE, not a fraction: the analyzer divides by 100. The old
+    // `minMarginPct: 0.045` would have asked for a 0.045% margin — about half
+    // a pixel on a 1080 canvas — while the statement promised 4.5%.
+    check: { fn: 'layout.margins', params: { minMarginPct: 4.5 } },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 40, bbox: [0.08, 0.15, 0.92, 0.45] },
     status: 'active',
   },
   {
     key: 'layout.grid-alignment',
-    statement: 'Every element origin must sit on the 8px grid.',
-    rationale: 'The base spacing unit is a token. Off-grid elements are the visual signature of hand-nudged work.',
+    statement: 'Element edges must align to the 12-column layout grid.',
+    rationale:
+      'Off-grid elements are the visual signature of hand-nudged work. Stated as columns because that is ' +
+      'what the check measures — residual distance from each element edge to the nearest column line. It ' +
+      'has no notion of an 8px baseline unit, and with no column count configured it does nothing at all.',
     dimension: 'layout',
     tier: 'cv',
     severity: 'advisory',
     weight: 0.25,
-    check: { fn: 'layout.grid_alignment', params: { gridPx: 8, tolerancePx: 2 } },
+    // `columns` defaults to 0, and at 0 the analyzer returns not_applicable —
+    // so the previous `gridPx` spelling did not merely mis-measure, it never
+    // measured anything.
+    check: { fn: 'layout.grid_alignment', params: { columns: 12, gutterPct: 2, marginPct: 5, tolerancePct: 1, maxOffGridRatio: 0.25 } },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 41, bbox: [0.1, 0.1, 0.9, 0.35] },
     status: 'active',
@@ -405,13 +458,16 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'cv',
     severity: 'major',
     weight: 1,
-    check: { fn: 'layout.element_overlap', params: { maxOverlapPct: 1, pairs: [['text', 'logo'], ['text', 'text']] } },
+    // IoU, not percentage overlap, and the comparison is across kinds rather
+    // than named pairs: every element of a listed kind is compared with every
+    // other. `image` covers the logo, which is detected as an image element.
+    check: { fn: 'layout.element_overlap', params: { maxIou: 0.01, kinds: ['text', 'image'] } },
     provenance: 'manual',
     status: 'active',
   },
   {
     key: 'layout.text-density',
-    statement: 'Text should cover no more than 20% of the canvas on paid social.',
+    statement: 'Text should occupy no more than 5 of the 25 cells of the canvas grid on paid social.',
     rationale:
       'Meta withdrew the hard 20% rule in 2021 but still suppresses delivery on text-heavy creative. Advisory, because it is a delivery risk, not a brand breach.',
     dimension: 'layout',
@@ -419,26 +475,13 @@ export const SEED_RULES: SeedRule[] = [
     severity: 'advisory',
     weight: 0,
     scope: { channels: ['meta-feed', 'meta-story', 'meta-reel'] },
-    check: { fn: 'layout.text_density', params: { maxTextAreaPct: 20 } },
+    // The check counts occupied cells in a 5x5 grid rather than measuring
+    // area, which is how the platform's own tool worked. 5 of 25 cells is the
+    // 20% the rule has always meant.
+    check: { fn: 'layout.text_density', params: { cells: 5, maxOccupiedCells: 5 } },
     provenance: 'transfer',
     citation: { doc: 'Meta Advertising Standards — text in images' },
     status: 'active',
-  },
-  {
-    key: 'layout.de-expansion-headroom',
-    statement:
-      'German layouts must leave 35% horizontal headroom in every text box relative to the English master.',
-    rationale:
-      'German compounds run about a third longer. Without headroom the localised variant overflows and the overlap rule fires downstream instead of the real cause.',
-    dimension: 'layout',
-    tier: 'cv',
-    severity: 'major',
-    weight: 1,
-    scope: { markets: ['de-DE'] },
-    check: { fn: 'layout.element_overlap', params: { requireHeadroomPct: 35, comparedTo: 'master' } },
-    provenance: 'inductive',
-    support: { sampleSize: 18, percentile: 75, observedValue: 1.34 },
-    status: 'proposed',
   },
 
   /* =====================================================================
@@ -454,7 +497,10 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'cv',
     severity: 'minor',
     weight: 1,
-    check: { fn: 'imagery.style_conformance', params: { profileName: 'Northwind photography', maxDistancePercentile: 5 } },
+    // The profile itself is the brand's image style profile in the ontology;
+    // the parameter is the rejection boundary, given as the distance measured
+    // at the corpus 5th percentile rather than as the percentile itself.
+    check: { fn: 'imagery.style_conformance', params: { maxDistance: 0.41 } },
     provenance: 'inductive',
     support: { sampleSize: 52, percentile: 5, observedValue: 0.41 },
     status: 'active',
@@ -467,7 +513,10 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'cv',
     severity: 'minor',
     weight: 0.75,
-    check: { fn: 'imagery.medium', params: { allowed: ['photo', 'illustration'], prohibited: ['3d', 'screenshot'] } },
+    // An allowlist only: anything not listed is prohibited, so a separate
+    // `prohibited` array would be a second way to say the same thing and a
+    // second thing to keep in step.
+    check: { fn: 'imagery.medium', params: { allowedMediums: ['photo', 'illustration'], minConfidence: 0.45 } },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 47, bbox: [0.08, 0.2, 0.92, 0.55] },
     status: 'active',
@@ -484,7 +533,7 @@ export const SEED_RULES: SeedRule[] = [
     weight: 2,
     check: {
       fn: 'imagery.prohibited_subject',
-      params: { subjects: ['alcohol', 'smoking', 'driving while drinking', 'child holding a hot drink'] },
+      params: { prohibitedSubjects: ['alcohol', 'smoking', 'driving while drinking', 'child holding a hot drink'] },
     },
     rubric: {
       kind: 'binary',
@@ -500,14 +549,17 @@ export const SEED_RULES: SeedRule[] = [
     status: 'active',
   },
   {
-    key: 'imagery.no-reuse-within-90d',
-    statement: 'The same hero image must not appear in two campaigns within 90 days in the same market.',
-    rationale: 'Induced from the corpus: perceptual-hash collisions across campaigns correlate with wear-out complaints.',
+    key: 'imagery.no-reuse',
+    statement: 'A hero image must not be perceptually identical to one already running in the comparison set.',
+    rationale:
+      'Perceptual hashing, so a re-export at another size is still the same photo. The 90-day window and ' +
+      'the market boundary are chosen by whoever assembles the comparison set — the check compares against ' +
+      'what it is given and has no notion of dates.',
     dimension: 'imagery',
     tier: 'cv',
     severity: 'advisory',
     weight: 0.25,
-    check: { fn: 'imagery.reuse', params: { windowDays: 90, phashDistanceThreshold: 6, scope: 'market' } },
+    check: { fn: 'imagery.reuse', params: { maxHammingDistance: 6 } },
     provenance: 'inductive',
     support: { sampleSize: 52, percentile: 80, observedValue: 4 },
     status: 'proposed',
@@ -525,7 +577,12 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'deterministic',
     severity: 'major',
     weight: 1.5,
-    check: { fn: 'copy.banned_terms', params: { useLexicon: true, severityFromTerm: true, fuzzyThreshold: 0.92 } },
+    // No parameters: the terms come from the tenant lexicon in the ontology,
+    // which is where this brand keeps them. A `terms` array here would EXTEND
+    // the lexicon rather than replace it — useful for a shipped pack that adds
+    // a regulator's vocabulary on top, and wrong here, where the lexicon is
+    // already the single list.
+    check: { fn: 'copy.banned_terms', params: {} },
     provenance: 'manual',
     status: 'active',
   },
@@ -537,7 +594,7 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'deterministic',
     severity: 'minor',
     weight: 0.75,
-    check: { fn: 'copy.required_terms', params: { useLexicon: true, kinds: ['required'] } },
+    check: { fn: 'copy.required_terms', params: {} },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 55, bbox: [0.1, 0.15, 0.9, 0.4] },
     status: 'active',
@@ -551,7 +608,10 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'deterministic',
     severity: 'minor',
     weight: 0.75,
-    check: { fn: 'copy.locale_spelling', params: { useMarketRules: true } },
+    // No `locale`: unset means "take the asset's declared locale", which is
+    // exactly what the statement says. Pinning one here would apply a single
+    // market's spelling to every asset the rule touches.
+    check: { fn: 'copy.locale_spelling', params: {} },
     provenance: 'manual',
     status: 'active',
   },
@@ -563,7 +623,10 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'deterministic',
     severity: 'advisory',
     weight: 0.25,
-    check: { fn: 'copy.readability', params: { metric: 'flesch_reading_ease', minScore: 55, fields: ['headline', 'body'] } },
+    // The metric is chosen by which threshold is set, not by a `metric` name.
+    // `minWords` guards the other end: below about 20 words a readability
+    // formula is measuring noise.
+    check: { fn: 'copy.readability', params: { minFleschReadingEase: 55, minWords: 20 } },
     provenance: 'manual',
     status: 'active',
   },
@@ -577,7 +640,10 @@ export const SEED_RULES: SeedRule[] = [
     weight: 0.5,
     check: {
       fn: 'copy.cta_allowlist',
-      params: { allowed: ['Shop now', 'Order now', 'Find your roast', 'Subscribe', 'Learn more', 'Jetzt bestellen', 'Mehr erfahren'] },
+      params: {
+        allowed: ['Shop now', 'Order now', 'Find your roast', 'Subscribe', 'Learn more', 'Jetzt bestellen', 'Mehr erfahren'],
+        caseSensitive: false,
+      },
     },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 57, bbox: [0.12, 0.3, 0.88, 0.62] },
@@ -592,7 +658,9 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'vlm',
     severity: 'minor',
     weight: 1,
-    check: { fn: 'vlm.voice_tone', params: { axes: 'all', requireAllAxes: false, minAxisScore: 0.6 } },
+    // No parameters: the judge reads the brand's voice attributes from the
+    // ontology, each with its we-are / we-are-not pair and its weight.
+    check: { fn: 'vlm.voice_tone', params: {} },
     rubric: {
       kind: 'binary',
       question:
@@ -623,7 +691,21 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'hybrid',
     severity: 'major',
     weight: 1.25,
-    check: { fn: 'vlm.rule_adjudication', params: { detector: 'superlative', requireClaimMatch: true } },
+    /*
+     * The hybrid pattern, spelled out: code finds the superlatives, the model
+     * decides only whether one is backed. `measuredBy` names the analyzer that
+     * runs first and `measureParams` is the params object IT receives — the
+     * outer rule's own params never reach it. A clean measured pass short-
+     * circuits before any VLM call, which is why `adjudicatePasses` stays off.
+     */
+    check: {
+      fn: 'vlm.rule_adjudication',
+      params: {
+        measuredBy: 'copy.banned_terms',
+        measureParams: { terms: ['best', 'finest', 'smoothest', 'the No.1', 'unrivalled'] },
+        adjudicatePasses: false,
+      },
+    },
     rubric: {
       kind: 'binary',
       question: 'Does this copy make a superlative or comparative claim that is not matched by a registered claim?',
@@ -649,33 +731,49 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'deterministic',
     severity: 'major',
     weight: 1.5,
-    check: { fn: 'accessibility.contrast', params: { level: 'AA', normalRatio: 4.5, largeRatio: 3.0, largeTextPx: 24 } },
+    // `level` alone. The per-size thresholds are WCAG's, not ours: the check
+    // derives 4.5 or 3.0 from each run's measured size and weight. Restating
+    // them as parameters could only ever disagree with the standard.
+    check: { fn: 'accessibility.contrast', params: { level: 'AA' } },
     provenance: 'transfer',
     citation: { doc: 'WCAG 2.2 SC 1.4.3 (Contrast Minimum)' },
     status: 'active',
   },
   {
-    key: 'accessibility.legal-contrast',
-    statement: 'Legal and disclaimer copy must meet 4.5:1 regardless of its size.',
+    /*
+     * Not scoped to legal copy, because it cannot be. The check has no
+     * `styleName` parameter — `minRatio` sets one ratio for every run whatever
+     * its size, which IS the "no large-text exemption" policy, applied to the
+     * whole asset. That is a stricter rule than the one this slot used to
+     * claim, so it ships proposed rather than active: somebody has to agree to
+     * hold headlines to the body threshold before it starts failing work.
+     */
+    key: 'accessibility.no-large-text-exemption',
+    statement: 'All text must meet 4.5:1 contrast regardless of size.',
     rationale:
-      'The large-text exemption is exactly the loophole that produces unreadable disclaimers. It does not apply to legal copy here.',
+      'The large-text exemption is the loophole that produces unreadable disclaimers, and nothing in an ' +
+      'asset marks which run is legal copy. Holding every run to the body threshold closes it, at the cost ' +
+      'of failing large type that WCAG would pass at 3:1.',
     dimension: 'accessibility',
     tier: 'deterministic',
-    severity: 'blocker',
-    weight: 2,
-    check: { fn: 'accessibility.contrast', params: { styleName: 'Legal', minRatio: 4.5, ignoreLargeTextExemption: true } },
+    severity: 'major',
+    weight: 1.5,
+    check: { fn: 'accessibility.contrast', params: { minRatio: 4.5 } },
     provenance: 'manual',
-    status: 'active',
+    status: 'proposed',
   },
   {
     key: 'accessibility.font-size-floor',
-    statement: 'No rendered text may fall below 11px on screen.',
+    statement: 'No rendered text may fall below 8.25pt — 11px on a 96dpi screen.',
     rationale: 'A hard floor beneath every per-style minimum, so a mislabelled style cannot smuggle 7px copy through.',
     dimension: 'accessibility',
     tier: 'deterministic',
     severity: 'major',
     weight: 1,
-    check: { fn: 'accessibility.font_size_floor', params: { minPx: 11 } },
+    // Points, not pixels. The engine measures type in points and converts
+    // using the asset's DPI, so a floor expressed in px is a floor that moves
+    // when the canvas does.
+    check: { fn: 'accessibility.font_size_floor', params: { minSizePt: 8.25 } },
     provenance: 'transfer',
     citation: { doc: 'WCAG 2.2 SC 1.4.4 (Resize Text), applied as an absolute floor' },
     status: 'active',
@@ -688,140 +786,96 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'deterministic',
     severity: 'minor',
     weight: 0.5,
-    check: { fn: 'accessibility.alt_text', params: { minLength: 20, rejectFilenameLike: true } },
+    // Filename-like alt text is rejected intrinsically — "adequacy" is what
+    // this check measures, not presence — so there is no switch for it.
+    check: { fn: 'accessibility.alt_text', params: { minChars: 20, maxChars: 250 } },
     provenance: 'transfer',
     citation: { doc: 'WCAG 2.2 SC 1.1.1 (Non-text Content)' },
     status: 'proposed',
   },
 
   /* =====================================================================
-   * CHANNEL SPEC — 4 rules
+   * CHANNEL SPEC — 1 rule
    * ================================================================== */
   {
-    key: 'channel.dimensions',
-    statement: 'Asset dimensions and aspect ratio must match the declared placement spec.',
-    rationale: 'Rejected on upload by the platform anyway. Catching it here saves a full production round trip.',
+    /*
+     * One rule, not four.
+     *
+     * `channel_spec.conformance` validates the whole placement spec in a single
+     * pass — dimensions, aspect ratio, file size, format, DPI — reading it from
+     * the channel spec registry for the asset's channel. The `checks` array the
+     * four previous rules carried was read by nothing, so each of them ran the
+     * same complete validation and reported the same verdict under a different
+     * name: four criteria, one measurement, four chances to look like four
+     * independent confirmations.
+     *
+     * A `spec` parameter can override the registry for a placement the registry
+     * does not cover. Left unset here, which is what makes this rule portable
+     * across every channel the brand publishes to.
+     */
+    key: 'channel.conformance',
+    statement:
+      'Dimensions, aspect ratio, format, file size and print resolution must match the declared placement spec.',
+    rationale:
+      'The platform rejects these on upload anyway, so catching them here saves a full production round ' +
+      'trip. All of it is arithmetic on the file header — no model, no ambiguity.',
     dimension: 'channel_spec',
     tier: 'deterministic',
     severity: 'blocker',
     weight: 2,
-    check: { fn: 'channel_spec.conformance', params: { checks: ['aspectRatio', 'minDimensions', 'exactSizes'] } },
+    check: { fn: 'channel_spec.conformance', params: {} },
     provenance: 'transfer',
     citation: { doc: 'BrandLens channel spec registry 2026.1' },
     status: 'active',
-  },
-  {
-    key: 'channel.file-size',
-    statement: 'File size must be within the placement’s maximum.',
-    rationale: 'Same argument as dimensions, and even cheaper to check.',
-    dimension: 'channel_spec',
-    tier: 'deterministic',
-    severity: 'major',
-    weight: 1,
-    check: { fn: 'channel_spec.conformance', params: { checks: ['maxBytes', 'formats'] } },
-    provenance: 'transfer',
-    citation: { doc: 'BrandLens channel spec registry 2026.1' },
-    status: 'active',
-  },
-  {
-    key: 'channel.video-encoding',
-    statement: 'Video duration, frame rate, bitrate and audio must satisfy the placement spec.',
-    rationale: 'Probed from the container metadata. No model, no ambiguity.',
-    dimension: 'channel_spec',
-    tier: 'deterministic',
-    severity: 'major',
-    weight: 1,
-    scope: { assetTypes: ['video'] },
-    check: { fn: 'channel_spec.conformance', params: { checks: ['durationMs', 'fps', 'bitrateKbps', 'audio', 'videoCodec'] } },
-    provenance: 'transfer',
-    citation: { doc: 'BrandLens channel spec registry 2026.1' },
-    status: 'active',
-  },
-  {
-    key: 'channel.print-prepress',
-    statement: 'Print artwork must be 300dpi, CMYK, with 3mm bleed and total ink coverage at or below 300%.',
-    rationale: 'Each of these has cost a reprint. All four are arithmetic on the file header.',
-    dimension: 'channel_spec',
-    tier: 'deterministic',
-    severity: 'blocker',
-    weight: 1.5,
-    scope: { channels: ['print-a4', 'print-a5'] },
-    check: { fn: 'channel_spec.conformance', params: { checks: ['minDpi', 'colorSpace', 'bleedMm', 'totalInkCoverageMaxPct'] } },
-    provenance: 'transfer',
-    citation: { doc: 'BrandLens channel spec registry 2026.1' },
-    status: 'proposed',
   },
 
   /* =====================================================================
-   * LEGAL — 6 rules
+   * LEGAL — 3 rules
    * ================================================================== */
   {
-    key: 'legal.claim-registered',
-    statement: 'Every factual claim in the copy must match a claim in the register.',
+    /*
+     * One rule, not three.
+     *
+     * `copy.claim_substantiation` walks the register once and applies all three
+     * conditions to every match: is the claim registered, is it in date, is the
+     * asset's market listed in its jurisdictions. Splitting it into three rules
+     * did not split the work — each of the three ran the identical check and
+     * reported the identical verdict, so a single expired claim produced three
+     * blocker findings that looked like three separate failures.
+     */
+    key: 'legal.claims-substantiated',
+    statement:
+      'Every factual claim in the copy must match a claim in the register that is in date and approved for ' +
+      'this market.',
     rationale:
-      'The register is the object regulated customers actually buy. An unregistered claim is an unapproved claim.',
+      'The register is the object regulated customers actually buy. An unregistered claim is an unapproved ' +
+      'claim; a lapsed one is an unapproved claim that used to be fine; and a claim substantiated for the ' +
+      'UK is not substantiated in the US. All three are the same failure at different points in the life of ' +
+      'the evidence.',
     dimension: 'legal',
     tier: 'deterministic',
     severity: 'blocker',
     weight: 2,
-    check: { fn: 'copy.claim_substantiation', params: { requireRegistered: true, fuzzyThreshold: 0.88 } },
-    provenance: 'manual',
-    status: 'active',
-  },
-  {
-    key: 'legal.claim-in-date',
-    statement: 'A claim must not be used after its approval expires.',
-    rationale:
-      'Claims lapse when the evidence behind them does. This is a date comparison, and it is the check nobody performs by hand.',
-    dimension: 'legal',
-    tier: 'deterministic',
-    severity: 'blocker',
-    weight: 2,
-    check: { fn: 'copy.claim_substantiation', params: { checkExpiry: true, graceDays: 0 } },
-    provenance: 'manual',
-    status: 'active',
-  },
-  {
-    key: 'legal.claim-jurisdiction',
-    statement: 'A claim may only be used in a market listed in its jurisdictions.',
-    rationale:
-      'The recyclability claim is substantiated for the UK and Germany and for nowhere else. Using it in the US is a specific, provable breach.',
-    dimension: 'legal',
-    tier: 'deterministic',
-    severity: 'blocker',
-    weight: 2,
-    check: { fn: 'copy.claim_substantiation', params: { checkJurisdiction: true } },
+    // A 0–100 similarity score, not a 0–1 fraction. The previous `0.88` would
+    // have matched asset copy to any registered claim at all.
+    check: { fn: 'copy.claim_substantiation', params: { fuzzyThreshold: 88 } },
     provenance: 'manual',
     status: 'active',
   },
   {
     key: 'legal.disclaimer-present',
-    statement: 'Where a claim requires a disclaimer, that disclaimer must be present.',
-    rationale: 'Presence is the first of four conditions, and the only one most tools check.',
-    dimension: 'legal',
-    tier: 'deterministic',
-    severity: 'blocker',
-    weight: 2,
-    check: { fn: 'copy.disclaimer_present', params: { matchThreshold: 0.85 } },
-    provenance: 'manual',
-    status: 'active',
-  },
-  {
-    key: 'legal.disclaimer-legible',
-    statement:
-      'A required disclaimer must be at least 8pt, meet 4.5:1 contrast, and sit within 25% of the canvas height of the claim it qualifies.',
+    statement: 'Where a claim requires a disclaimer, that disclaimer must be present and materially complete.',
     rationale:
-      'Present, large enough, readable, and adjacent. A disclaimer that fails any one of the four has not been made.',
+      'Presence and wording only. A previous companion rule promised to check that disclaimers were also ' +
+      'large enough, legible and adjacent to the claim — no analyzer measures any of those, so it passed ' +
+      'assets it claimed to catch. Size and contrast are enforced by the accessibility rules, which measure ' +
+      'them; proximity is not enforced at all, and saying so is better than implying otherwise.',
     dimension: 'legal',
     tier: 'deterministic',
     severity: 'blocker',
     weight: 2,
-    check: {
-      fn: 'copy.disclaimer_present',
-      params: { checkFontSize: true, checkContrast: true, checkProximity: true, maxProximityPct: 0.25 },
-    },
-    provenance: 'transfer',
-    citation: { doc: 'FTC .com Disclosures (2013) — clear and conspicuous; CAP Code s.3.9' },
+    check: { fn: 'copy.disclaimer_present', params: { fuzzyThreshold: 85 } },
+    provenance: 'manual',
     status: 'active',
   },
   {
@@ -835,7 +889,25 @@ export const SEED_RULES: SeedRule[] = [
     severity: 'blocker',
     weight: 2,
     scope: { markets: ['de-DE'] },
-    check: { fn: 'vlm.rule_adjudication', params: { detector: 'health_claim', authorisedList: 'eu-1924-2006' } },
+    /*
+     * The measured half is a vocabulary sweep, the judged half is the
+     * authorisation decision. Regulation 1924/2006 is an allowlist and no
+     * analyzer implements it, so the honest split is: code finds the candidate
+     * health-claim language, and the model decides whether what it found is an
+     * authorised claim or an unauthorised one. Without a measured half this
+     * check asks the judge whether "a documented exception applies" to a
+     * measurement that does not exist.
+     */
+    check: {
+      fn: 'vlm.rule_adjudication',
+      params: {
+        measuredBy: 'copy.banned_terms',
+        measureParams: {
+          terms: ['fördert', 'unterstützt das Immunsystem', 'steigert die Konzentration', 'entgiftet', 'stärkt'],
+        },
+        adjudicatePasses: false,
+      },
+    },
     rubric: {
       kind: 'binary',
       question:
@@ -863,7 +935,10 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'vlm',
     severity: 'minor',
     weight: 0.75,
-    check: { fn: 'vlm.mood', params: { target: ['warm', 'unhurried', 'grounded'], avoid: ['clinical', 'frantic', 'luxurious'] } },
+    // One `mood` string, read straight into the prompt. Two arrays would have
+    // to be reassembled into a sentence anyway, and the sentence is the thing
+    // the judge actually reads.
+    check: { fn: 'vlm.mood', params: { mood: 'warm, unhurried and grounded — not clinical, frantic or luxurious' } },
     rubric: {
       kind: 'ordinal',
       question: 'How well does the overall mood of this creative match: warm, unhurried, grounded?',
@@ -902,7 +977,9 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'vlm',
     severity: 'advisory',
     weight: 0,
-    check: { fn: 'vlm.overall_judgment', params: { includeUpstreamFindings: true } },
+    // Upstream findings are always handed over — that is the entire reason
+    // this check runs last. There is nothing to switch on.
+    check: { fn: 'vlm.overall_judgment', params: {} },
     rubric: {
       kind: 'binary',
       question:
@@ -924,7 +1001,13 @@ export const SEED_RULES: SeedRule[] = [
     severity: 'major',
     weight: 1,
     scope: { markets: ['de-DE'] },
-    check: { fn: 'vlm.subject_appropriateness', params: { market: 'de-DE' } },
+    // The market comes from the asset, and the prohibited subjects from the
+    // brand's image style profile. `sensitivities` is the one thing a rule can
+    // add that neither of those carries.
+    check: {
+      fn: 'vlm.subject_appropriateness',
+      params: { sensitivities: ['German advertising norms around health, alcohol and family imagery'] },
+    },
     rubric: {
       kind: 'binary',
       question: 'Is anything depicted here inappropriate or likely to cause offence in the German market?',
@@ -948,7 +1031,9 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'cv',
     severity: 'major',
     weight: 1,
-    check: { fn: 'logo.occlusion', params: { maxOcclusionPct: 0 } },
+    // The shipped defaults, left explicit: the rationale says the tolerance
+    // needs a human, and 2% is what it will be reviewed against.
+    check: { fn: 'logo.occlusion', params: { maxCoverageFrac: 0.02, maxIou: 0.02 } },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 16, bbox: [0.08, 0.24, 0.92, 0.68], extractedBy: 'brandbook-extractor@1.0' },
     status: 'proposed',
@@ -962,48 +1047,34 @@ export const SEED_RULES: SeedRule[] = [
     tier: 'cv',
     severity: 'minor',
     weight: 0.5,
-    check: { fn: 'color.palette_conformance', params: { tintsOnly: true, deltaEThreshold: 3 } },
+    // `allowTints: false` is what "only the declared tints" means to this
+    // analyzer: stop auto-accepting anything that is merely a lighter or
+    // darker version of a token, and require a declared swatch.
+    check: { fn: 'color.palette_conformance', params: { allowTints: false, maxDeltaE: 3 } },
     provenance: 'deductive',
     citation: { doc: BOOK, page: 23, bbox: [0.06, 0.42, 0.94, 0.86], extractedBy: 'brandbook-extractor@1.0' },
     status: 'proposed',
   },
   {
-    key: 'typography.tracking-display',
-    statement: 'Display type must be tracked at -0.02em. No optical adjustment beyond ±0.005em.',
-    rationale: 'Induced from the approved corpus; the interquartile range is tight enough to be a real convention.',
+    /*
+     * This slot used to hold a tracking rule (-0.02em on Display). No analyzer
+     * measures letter-spacing, so it could never have produced a verdict; it
+     * was pointed at the casing check, which ignored every parameter it was
+     * given. Replaced with the convention the same corpus actually supports
+     * and the engine can measure.
+     */
+    key: 'typography.sentence-case',
+    statement: 'Headlines are set in sentence case. All-caps is reserved for the wordmark.',
+    rationale:
+      'Induced from the approved corpus: 39 of 41 headlines are sentence case. Advisory until confirmed, ' +
+      'because a deliberate all-caps campaign line is a decision, not a defect.',
     dimension: 'typography',
     tier: 'deterministic',
     severity: 'advisory',
     weight: 0.25,
-    check: { fn: 'typography.casing', params: { styleName: 'Display', letterSpacingEm: -0.02, tolerance: 0.005 } },
+    check: { fn: 'typography.casing', params: { casing: 'sentence', maxAllCapsRatio: 0.15, minChars: 8 } },
     provenance: 'inductive',
-    support: { sampleSize: 41, percentile: 50, observedValue: -0.0201 },
-    status: 'proposed',
-  },
-  {
-    key: 'layout.cta-bottom-third',
-    statement: 'The primary CTA sits in the bottom third of the canvas.',
-    rationale: 'Induced: 38 of 52 approved assets place it there. Below the threshold we would normally activate at.',
-    dimension: 'layout',
-    tier: 'cv',
-    severity: 'advisory',
-    weight: 0.25,
-    check: { fn: 'layout.grid_alignment', params: { element: 'cta', region: 'bottom-third' } },
-    provenance: 'inductive',
-    support: { sampleSize: 52, percentile: 73, observedValue: 0.731 },
-    status: 'proposed',
-  },
-  {
-    key: 'copy.headline-length',
-    statement: 'Headlines must be nine words or fewer.',
-    rationale: 'Induced from the approved corpus at the 90th percentile. Needs confirmation that it is a rule, not a habit.',
-    dimension: 'copy',
-    tier: 'deterministic',
-    severity: 'advisory',
-    weight: 0.25,
-    check: { fn: 'copy.readability', params: { field: 'headline', maxWords: 9 } },
-    provenance: 'inductive',
-    support: { sampleSize: 52, percentile: 90, observedValue: 9 },
+    support: { sampleSize: 41, percentile: 95, observedValue: 0.951 },
     status: 'proposed',
   },
 ];

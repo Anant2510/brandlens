@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Shows what is running: PM2 processes, Windows services, and listening ports.
@@ -11,7 +11,7 @@
       * is anything actually listening on 3000 / 4000 / 8000 / 5432
 
     For a functional probe of each service (HTTP + database), use
-    healthcheck.ps1 instead — this script deliberately does no I/O against the
+    healthcheck.ps1 instead -- this script deliberately does no I/O against the
     services, so it still works when they are wedged.
 
 .PARAMETER Detailed
@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 
 if ($Json) { Set-BrandLensQuiet $true }
 
-Write-Banner 'BrandLens · status' (Get-BrandLensRoot)
+Write-Banner 'BrandLens - status' (Get-BrandLensRoot)
 
 # ---------------------------------------------------------------------------
 # PM2
@@ -49,20 +49,29 @@ if ($pm2) {
     # `pm2 jlist` is the stable machine interface; the pretty table is not.
     $raw = & $pm2 jlist 2>&1 | Out-String
     try {
-        $parsed = $raw | ConvertFrom-Json
+        # Case-sensitive parser: pm2_env carries the Windows environment block,
+        # where 'username' and 'USERNAME' both appear and ConvertFrom-Json
+        # rejects them as duplicates.
+        $parsed = ConvertFrom-JsonSafe $raw
+        if ($null -eq $parsed) { throw 'pm2 jlist returned no parseable JSON' }
+        # Dictionary indexing, not dot-access: ConvertFrom-JsonSafe returns
+        # Dictionary<string,object> so that key comparison stays case-sensitive.
         foreach ($proc in $parsed) {
+            $procStatus = Get-JsonValue $proc 'pm2_env' 'status'
+            $uptimeMs   = Get-JsonValue $proc 'pm2_env' 'pm_uptime'
+            $memBytes   = Get-JsonValue $proc 'monit' 'memory'
             $processes += [pscustomobject]@{
-                Name      = $proc.name
-                Status    = $proc.pm2_env.status
-                PID       = $proc.pid
-                Restarts  = $proc.pm2_env.restart_time
-                Uptime    = if ($proc.pm2_env.status -eq 'online' -and $proc.pm2_env.pm_uptime) {
-                    $span = (Get-Date) - ([DateTimeOffset]::FromUnixTimeMilliseconds([int64]$proc.pm2_env.pm_uptime)).LocalDateTime
+                Name      = Get-JsonValue $proc 'name'
+                Status    = $procStatus
+                PID       = Get-JsonValue $proc 'pid'
+                Restarts  = Get-JsonValue $proc 'pm2_env' 'restart_time'
+                Uptime    = if ($procStatus -eq 'online' -and $uptimeMs) {
+                    $span = (Get-Date) - ([DateTimeOffset]::FromUnixTimeMilliseconds([int64]$uptimeMs)).LocalDateTime
                     '{0}d {1:00}h {2:00}m' -f [int]$span.TotalDays, $span.Hours, $span.Minutes
                 } else { '-' }
-                MemoryMB  = if ($proc.monit.memory) { [math]::Round($proc.monit.memory / 1MB, 1) } else { 0 }
-                CPU       = $proc.monit.cpu
-                Instances = $proc.pm2_env.instances
+                MemoryMB  = if ($memBytes) { [math]::Round([double]$memBytes / 1MB, 1) } else { 0 }
+                CPU       = Get-JsonValue $proc 'monit' 'cpu'
+                Instances = Get-JsonValue $proc 'pm2_env' 'instances'
             }
         }
     } catch {
@@ -75,7 +84,7 @@ if ($pm2) {
     Write-Warn 'pm2 is not installed or not on PATH'
 }
 
-# Report processes PM2 does not know about at all — "0 restarts, missing" is a
+# Report processes PM2 does not know about at all -- "0 restarts, missing" is a
 # very different situation from "errored, 47 restarts".
 $known = $processes.Name
 $missing = @($BrandLensProcesses | Where-Object { $_ -notin $known })
@@ -176,7 +185,7 @@ Write-Host '  Windows services' -ForegroundColor Cyan
 if ($services.Count -gt 0) {
     $services | Write-TableBlock
 } else {
-    Write-Info '(none found — BrandLens will not start automatically after a reboot)'
+    Write-Info '(none found -- BrandLens will not start automatically after a reboot)'
     Write-Hint @('Install it:  .\infra\windows\install-services.ps1')
 }
 

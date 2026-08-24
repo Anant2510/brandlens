@@ -147,6 +147,14 @@ export interface ConfirmDialogProps {
   cancelLabel?: string;
   destructive?: boolean;
   loading?: boolean;
+  /**
+   * Blocks confirmation while the dialog's own form is incomplete.
+   *
+   * The server is still the authority — a required reason is enforced there
+   * and returns a 400 — but making somebody submit to discover a requirement
+   * is a worse way to learn it than seeing the button greyed out.
+   */
+  confirmDisabled?: boolean;
   children?: React.ReactNode;
 }
 
@@ -160,6 +168,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   destructive = false,
   loading = false,
+  confirmDisabled = false,
   children,
 }: ConfirmDialogProps) {
   return (
@@ -178,6 +187,7 @@ export function ConfirmDialog({
             variant={destructive ? 'danger' : 'primary'}
             size="sm"
             loading={loading}
+            disabled={confirmDisabled}
             onClick={() => void onConfirm()}
           >
             {confirmLabel}

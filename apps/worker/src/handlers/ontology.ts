@@ -12,7 +12,9 @@ import {
   voiceAttributes,
 } from '@brandlens/db';
 import type { RuleDefinition } from '@brandlens/contracts';
+import { sanitiseCheck } from '@brandlens/contracts';
 import { compileRows, type CompilableRuleRow } from '@brandlens/api/rulesets/compile';
+import { loadInheritedRules, mergeRuleRows } from '@brandlens/api/rulesets/inherited-rules';
 import { computeSpecificity } from '@brandlens/api/rulesets/specificity';
 import { hexToLab } from '@brandlens/api/common/color';
 import { env } from '../config';
@@ -312,7 +314,14 @@ export async function compileRuleset(job: CompileRulesetJob): Promise<void> {
       .where(and(eq(rules.brandId, job.brandId), eq(rules.status, 'active')))
       .orderBy(rules.key);
 
-    const compiled = compileRows(job.brandId, rows as unknown as CompilableRuleRow[]);
+    // Same merge the API performs. Both paths must agree: a ruleset compiled
+    // by the worker and one compiled by the API have to hash identically, or
+    // the queue would republish a "new" version on every run.
+    const inherited = (await loadInheritedRules(tx, job.orgId, job.brandId)).filter((r) => r.status === 'active');
+    const compiled = compileRows(
+      job.brandId,
+      mergeRuleRows(rows as unknown as CompilableRuleRow[], inherited),
+    );
 
     const existing = await tx
       .select({ id: rulesets.id, version: rulesets.version })
@@ -394,6 +403,14 @@ export async function insertProposedRules(
       .from(rules)
       .where(and(eq(rules.brandId, brandId), eq(rules.key, p.key)));
 
+    // Sanitised, not refused. A model reading a brand book gets most of a rule
+    // right and invents the odd parameter name; discarding the whole proposal
+    // wastes the correct part, and keeping the invented key would show a
+    // reviewer a threshold the engine never applies. What was dropped goes
+    // into the rationale, where the person deciding whether to activate it
+    // will actually read it.
+    const sanitised = sanitiseCheck(p.check);
+
     const [row] = await tx
       .insert(rules)
       .values({
@@ -402,14 +419,14 @@ export async function insertProposedRules(
         key: p.key.slice(0, 160),
         version: (max ?? 0) + 1,
         statement: p.statement,
-        rationale: p.rationale ?? null,
+        rationale: [p.rationale, sanitised.note].filter(Boolean).join(' ') || null,
         dimension: p.dimension,
         tier: p.tier,
         severity: p.severity,
         weight: p.weight,
         scope: p.scope,
         specificity: computeSpecificity(p.scope),
-        check: { fn: p.check.fn, params: p.check.params ?? {} },
+        check: sanitised.check as { fn: string; params: Record<string, unknown> },
         rubric: (p.rubric ?? null) as Record<string, unknown> | null,
         provenance: p.provenance && p.provenance !== 'manual' ? p.provenance : provenance,
         citation: documentId ? { ...(p.citation ?? {}), documentId } : (p.citation ?? null),

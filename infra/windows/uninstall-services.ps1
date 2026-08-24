@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
@@ -52,7 +52,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 
-Write-Banner 'BrandLens · uninstall Windows service'
+Write-Banner 'BrandLens - uninstall Windows service'
 
 $pm2Home = [Environment]::GetEnvironmentVariable('PM2_HOME', 'Machine')
 if (-not $pm2Home) { $pm2Home = 'C:\ProgramData\pm2' }
@@ -63,7 +63,7 @@ Write-Info "service     $ServiceName (NSSM) / PM2 (pm2-installer)"
 Write-Host ''
 
 # ---------------------------------------------------------------------------
-# 1 — processes
+# 1 -- processes
 # ---------------------------------------------------------------------------
 $pm2 = Get-Pm2Command
 if ($pm2 -and -not $KeepProcesses) {
@@ -93,11 +93,11 @@ if ($pm2 -and -not $KeepProcesses) {
     Write-Skip 'left running (-KeepProcesses)'
 } else {
     Write-Step 'processes'
-    Write-Warn 'pm2 not found — skipping process teardown'
+    Write-Warn 'pm2 not found -- skipping process teardown'
 }
 
 # ---------------------------------------------------------------------------
-# 2 — services
+# 2 -- services
 # ---------------------------------------------------------------------------
 if (-not $NssmPath -and (Test-CommandExists 'nssm')) { $NssmPath = (Get-Command 'nssm').Source }
 
@@ -151,11 +151,11 @@ foreach ($candidate in $candidates) {
 
 if (-not $removedAny) {
     Write-Step 'services'
-    Write-Skip 'none found — nothing to remove'
+    Write-Skip 'none found -- nothing to remove'
 }
 
 # ---------------------------------------------------------------------------
-# 3 — PM2_HOME
+# 3 -- PM2_HOME
 # ---------------------------------------------------------------------------
 if ($RemovePm2Home) {
     Write-Step 'PM2_HOME'

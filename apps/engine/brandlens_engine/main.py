@@ -26,12 +26,12 @@ from . import ENGINE_VERSION, PIPELINE_VERSION
 from .assemble import assemble
 from .cache import get_cache
 from .config import Settings, get_settings
+from .copy_intelligence import analyze_copy
 from .embeddings import build_embedding_provider
 from .extract import extract_rules
 from .induce import induce_rules
 from .llm.factory import provider_status
 from .logging import bind_request, clear_request, configure_logging, get_logger
-from .copy_intelligence import analyze_copy
 from .models import (
     AnalyzeCopyRequest,
     AnalyzeRequest,

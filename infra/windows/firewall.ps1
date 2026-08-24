@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
@@ -7,9 +7,9 @@
 .DESCRIPTION
     THE RECOMMENDED TOPOLOGY
 
-        internet ──► :443 Caddy ──┬──► 127.0.0.1:3000  web console
-                     :80  Caddy   ├──► 127.0.0.1:4000  API
-                                  └──► 127.0.0.1:8000  engine (never proxied)
+        internet --> :443 Caddy --+--> 127.0.0.1:3000  web console
+                     :80  Caddy   +--> 127.0.0.1:4000  API
+                                  \--> 127.0.0.1:8000  engine (never proxied)
                                        127.0.0.1:5432  PostgreSQL
 
     Only Caddy listens publicly. The four application ports stay bound to
@@ -43,12 +43,12 @@
     an internal deployment.
 
 .PARAMETER AllowPostgres
-    Also open 5432. Only for a separate application host — never expose
+    Also open 5432. Only for a separate application host -- never expose
     PostgreSQL to the internet.
 
 .PARAMETER FirewallProfile
     Firewall profiles the rules apply to: Domain, Private, Public, or Any.
-    Default: Domain,Private — deliberately NOT Public.
+    Default: Domain,Private -- deliberately NOT Public.
 
 .PARAMETER Remove
     Delete every BrandLens firewall rule and exit.
@@ -86,7 +86,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 
-Write-Banner 'BrandLens · firewall'
+Write-Banner 'BrandLens - firewall'
 
 $GROUP = 'BrandLens'
 
@@ -219,7 +219,7 @@ foreach ($rule in $wanted) {
 
 if ($wanted.Count -eq 0) {
     Write-Step 'rules'
-    Write-Skip 'LocalOnly mode — no inbound rules created'
+    Write-Skip 'LocalOnly mode -- no inbound rules created'
 }
 
 # ---------------------------------------------------------------------------
@@ -243,7 +243,7 @@ foreach ($entry in $internalPorts) {
         continue
     }
     $addresses = ($listeners.LocalAddress | Select-Object -Unique) -join ', '
-    # 0.0.0.0 / :: mean "every interface" — reachable from the network.
+    # 0.0.0.0 / :: mean "every interface" -- reachable from the network.
     $wide = @($listeners | Where-Object { $_.LocalAddress -in @('0.0.0.0', '::') })
     if ($wide.Count -gt 0 -and $entry.MustBeLocal) {
         Write-Host ("  {0,-12} {1,-6} {2}" -f $entry.Name, $entry.Port, $addresses) -ForegroundColor Yellow

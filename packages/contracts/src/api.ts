@@ -84,6 +84,43 @@ export const BulkRuleDecisionInput = z.object({
   note: z.string().optional(),
 });
 
+/* --- rule packs ---------------------------------------------------------- */
+
+/**
+ * Turning a pack on or off for one brand.
+ *
+ * `reason` is required to DISABLE a pack that is on by default. Switching off
+ * accessibility checks is a decision somebody should have to write down, and
+ * the row records who did it — a disabled baseline with no explanation is
+ * indistinguishable, six months later, from one nobody ever noticed.
+ */
+export const SetRulePackEnabledInput = z.object({
+  enabled: z.boolean(),
+  reason: z.string().min(1).max(2000).optional(),
+});
+
+/**
+ * Taking ownership of one shipped rule.
+ *
+ * `edits` is optional and applies in the same transaction, so "fork and change
+ * the threshold" is one act with one audit entry rather than a fork followed
+ * by an edit that looks unrelated.
+ */
+export const ForkRuleTemplateInput = z.object({
+  templateId: z.string().uuid(),
+  edits: z
+    .object({
+      statement: z.string().min(1).optional(),
+      rationale: z.string().optional(),
+      severity: z.enum(['blocker', 'major', 'minor', 'advisory']).optional(),
+      weight: z.number().min(0).max(10).optional(),
+      scope: z.record(z.unknown()).optional(),
+      check: z.object({ fn: z.string(), params: z.record(z.unknown()).optional() }).optional(),
+      rubric: z.record(z.unknown()).nullish(),
+    })
+    .optional(),
+});
+
 export const CompileRulesetInput = z.object({
   label: z.string().optional(),
   scoringConfig: z

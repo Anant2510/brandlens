@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Starts the BrandLens processes under PM2.
@@ -39,7 +39,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_common.ps1')
 
-Write-Banner 'BrandLens · start'
+Write-Banner 'BrandLens - start'
 
 $pm2 = Assert-Pm2
 $root = Get-BrandLensRoot
@@ -89,7 +89,7 @@ $webBuild = Join-Path $root 'apps\web\.next'
 if (Test-Path $webBuild) {
     Write-Ok '.next present'
 } else {
-    Write-Warn 'not built — brandlens-web will fail to start'
+    Write-Warn 'not built -- brandlens-web will fail to start'
     $blocking += 'Run: pnpm build   (Next.js needs a production build before `next start`)'
 }
 

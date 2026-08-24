@@ -79,29 +79,22 @@ export function synthesizeRules(input: SynthesisInput, options: SynthesisOptions
     });
   }
 
-  const dominant = corroborated.find((c) => c.role === 'primary');
-  if (dominant && dominant.coverage >= 0.02) {
-    rules.push({
-      key: 'color.primary-presence',
-      version: 1,
-      statement: `The primary brand colour ${dominant.hex} should be present in brand-facing creative.`,
-      rationale: `Observed on ${dominant.pageCount} of ${input.pageCount} pages, covering ${(dominant.coverage * 100).toFixed(1)}% of painted area.`,
-      dimension: 'color',
-      tier: 'deterministic',
-      severity: 'minor',
-      weight: 0.6,
-      scope: {},
-      check: { fn: 'color.dominance_ratio', params: { hex: dominant.hex, minShare: 0.01, maxDeltaE: 5 } },
-      provenance: 'inductive',
-      status: 'proposed',
-      support: {
-        sampleSize: input.pageCount,
-        agreement: round(dominant.pageCount / input.pageCount, 3),
-        note: SEED_NOTE,
-        observed: [{ hex: dominant.hex, coverage: dominant.coverage }],
-      } as RuleDefinition['support'],
-    });
-  }
+  /*
+   * There is deliberately NO "the primary colour must be present" rule here.
+   *
+   * The engine has no colour-presence analyzer. The nearest thing,
+   * `color.dominance_ratio`, checks something else entirely: whether the mix of
+   * primary/secondary/accent matches a declared 60/30/10-style split. Pointing
+   * a presence statement at it produced a rule that read one way in the console
+   * and failed assets for a different reason — and the ratio it would have
+   * enforced was never measured, because a website's paint ratios are not a
+   * creative's. A homepage is mostly white with a small mark; the ad it links
+   * to is mostly brand colour. Both are correct.
+   *
+   * The primary colour and its coverage are recorded in the ontology, which is
+   * where an observation belongs. `color.palette-conformance` above carries the
+   * part discovery can actually evidence: colours must come from the palette.
+   */
 
   /* ------------------------------------------------------------ typography */
   const families = new Map<string, number>();
@@ -126,7 +119,12 @@ export function synthesizeRules(input: SynthesisInput, options: SynthesisOptions
       severity: 'major',
       weight: 1,
       scope: {},
-      check: { fn: 'typography.approved_family', params: { families: approved, allowFallbacks: true } },
+      // No `families` parameter: the analyzer resolves every run against the
+      // brand's approved type styles in the ontology — which this same
+      // discovery run wrote — and takes only matching tuning from params. A
+      // `families` array here would be read by nobody and drift from the
+      // ontology the moment either side changed.
+      check: { fn: 'typography.approved_family', params: {} },
       provenance: 'inductive',
       status: 'proposed',
       support: {
@@ -139,49 +137,89 @@ export function synthesizeRules(input: SynthesisInput, options: SynthesisOptions
   }
 
   /**
-   * Body and legal type get SEPARATE floors.
+   * Size floors come in two kinds, and they are enforced by two DIFFERENT
+   * analyzers. Getting this wrong is easy and silent, so it is written down.
    *
-   * Legal copy is conventionally set smaller than body, so folding the two
-   * together does one of two bad things: it drags the body floor down to the
-   * size of the disclaimer, or — if legal is excluded, as it was until the
-   * end-to-end test caught it — it never examines the one place where
-   * illegibly small type actually appears. Small print is where a legibility
-   * rule earns its keep.
+   *   * The brand's own scale — "body is never smaller than 16px, legal never
+   *     smaller than 12px" — is per style, and `typography.min_size` reads it
+   *     from the ontology's type styles, NOT from `check.params`. The only
+   *     parameter it accepts is `minSizePt`, and that is a single GLOBAL floor
+   *     that overrides every style at once. Passing the body floor there would
+   *     fail every line of legal copy on the asset, which is the opposite of
+   *     what a per-band rule was for. Discovery already writes `minSizePx` on
+   *     each type style, so the rule needs no parameters at all.
+   *
+   *   * The absolute legibility floor — "nobody can read 6pt" — is not the
+   *     brand's business and applies where the guidelines are silent. That is
+   *     `accessibility.font_size_floor`, which reads nothing from the ontology
+   *     and so still works on a brand nobody has configured.
+   *
+   * An earlier version emitted two `typography.min_size` rules with `minPx`
+   * and `appliesTo`. The analyzer reads neither: both rules displayed a
+   * threshold in the console and enforced the ontology's floors regardless.
    */
-  for (const band of [
-    { key: 'typography.min-size', label: 'Body copy', roles: ['body', 'caption'] },
-    { key: 'typography.min-size-legal', label: 'Legal and disclaimer copy', roles: ['legal'] },
-  ]) {
-    const sizes = input.typeStyles.filter((s) => band.roles.includes(s.role)).map((s) => s.fontSizePx);
-    if (sizes.length === 0) continue;
-
-    const floor = Math.min(...sizes);
-    // The floor is what the site does; 12px is the accessibility line below
-    // which "that is just their style" stops being a defence.
-    const proposed = Math.max(12, Math.round(floor));
-
+  const sizedStyles = input.typeStyles.filter((s) => s.fontSizePx > 0);
+  if (sizedStyles.length > 0) {
+    const perRole = [...new Map(sizedStyles.map((s) => [s.role, s])).keys()].sort();
     rules.push({
-      key: band.key,
+      key: 'typography.min-size',
       version: 1,
-      statement: `${band.label} must be at least ${proposed}px.`,
+      statement: 'Type must not be set smaller than the minimum recorded for its style.',
       rationale:
-        floor < 12
-          ? `The site's own smallest ${band.label.toLowerCase()} is ${floor.toFixed(0)}px, below the 12px ` +
-            'legibility floor. The rule proposes 12px rather than codifying the smaller value.'
-          : `The smallest ${band.label.toLowerCase()} observed on the site is ${floor.toFixed(0)}px.`,
+        `Each of the ${sizedStyles.length} type styles discovered on the site carries the smallest size it ` +
+        `was observed at (${perRole.join(', ')}). The rule holds creative to the brand's own scale rather ` +
+        'than to one number applied to headlines and small print alike.',
       dimension: 'typography',
       tier: 'deterministic',
       severity: 'minor',
       weight: 0.8,
       scope: {},
-      check: { fn: 'typography.min_size', params: { minPx: proposed, appliesTo: band.roles } },
+      // Intentionally empty. Floors are per style and live in the ontology;
+      // `minSizePt` here would be a single global override.
+      check: { fn: 'typography.min_size', params: {} },
       provenance: 'inductive',
       status: 'proposed',
       support: {
-        sampleSize: sizes.length,
-        agreement: round(sizes.filter((s) => s >= proposed).length / sizes.length, 3),
-        note: floor < 12 ? `The site currently violates this rule: its smallest is ${floor.toFixed(0)}px.` : SEED_NOTE,
-        observed: [{ observedFloorPx: round(floor, 1), proposedPx: proposed }],
+        sampleSize: sizedStyles.length,
+        agreement: 1,
+        note: SEED_NOTE,
+        observed: sizedStyles.map((s) => ({ style: s.name, role: s.role, floorPx: round(s.fontSizePx, 1) })),
+      } as RuleDefinition['support'],
+    });
+
+    const smallestPx = Math.min(...sizedStyles.map((s) => s.fontSizePx));
+    // 9pt is 12px at 96dpi — the line below which "that is just their style"
+    // stops being a defence. Proposed even when the site already clears it,
+    // because it is the rule that catches the 9px footer nobody reviewed.
+    const floorPt = 9;
+    rules.push({
+      key: 'accessibility.font-size-floor',
+      version: 1,
+      statement: `No text may be set below ${floorPt}pt (about ${Math.round((floorPt * 96) / 72)}px on screen).`,
+      rationale:
+        smallestPx < 12
+          ? `The smallest type on the site measures ${smallestPx.toFixed(0)}px, below the legibility floor. ` +
+            'The rule proposes the floor rather than codifying the smaller value the site currently uses.'
+          : `The smallest type on the site measures ${smallestPx.toFixed(0)}px, already at or above the floor. ` +
+            'The rule locks that in for creative the site does not cover.',
+      dimension: 'accessibility',
+      tier: 'deterministic',
+      severity: 'major',
+      weight: 1,
+      scope: {},
+      check: { fn: 'accessibility.font_size_floor', params: { minSizePt: floorPt } },
+      // Transfer, not inductive: a legibility floor is an external standard.
+      // Labelling it inductive would claim the site taught us the number.
+      provenance: 'transfer',
+      status: 'proposed',
+      support: {
+        sampleSize: sizedStyles.length,
+        agreement: 1,
+        note:
+          smallestPx < 12
+            ? `The site currently violates this rule: its smallest type is ${smallestPx.toFixed(0)}px.`
+            : 'An absolute floor, imported as a standard rather than inferred from the site.',
+        observed: [{ smallestObservedPx: round(smallestPx, 1), proposedFloorPt: floorPt }],
       } as RuleDefinition['support'],
     });
   }
@@ -199,7 +237,7 @@ export function synthesizeRules(input: SynthesisInput, options: SynthesisOptions
       severity: 'minor',
       weight: 0.6,
       scope: {},
-      check: { fn: 'typography.hierarchy', params: { minRatio: 1.25 } },
+      check: { fn: 'typography.hierarchy', params: { minStepRatio: 1.25 } },
       provenance: 'inductive',
       status: 'proposed',
       support: { sampleSize: input.pageCount, agreement: 1, note: SEED_NOTE } as RuleDefinition['support'],
@@ -224,7 +262,13 @@ export function synthesizeRules(input: SynthesisInput, options: SynthesisOptions
     severity: 'major',
     weight: 1,
     scope: {},
-    check: { fn: 'accessibility.contrast', params: { minRatio: 4.5, largeTextMinRatio: 3, largeTextPx: 24 } },
+    // `level`, not `minRatio`. A `minRatio` is a single ratio applied to every
+    // run regardless of size, so passing 4.5 here would hold large text to the
+    // body threshold and fail headlines that WCAG passes at 3:1 — a rule
+    // stricter than its own statement, which is how a rule gets switched off.
+    // With `level` the analyzer derives the per-run threshold from size and
+    // weight, which is what the statement above describes.
+    check: { fn: 'accessibility.contrast', params: { level: 'AA' } },
     status: 'proposed',
     support: {
       sampleSize: input.pageCount,
@@ -246,7 +290,9 @@ export function synthesizeRules(input: SynthesisInput, options: SynthesisOptions
       severity: 'blocker',
       weight: 1,
       scope: {},
-      check: { fn: 'logo.presence', params: { minConfidence: 0.6 } },
+      // `minScore`, not `minConfidence`. The analyzer's default is 0.0, so the
+      // misnamed key meant any match at all counted as the logo being present.
+      check: { fn: 'logo.presence', params: { minScore: 0.6 } },
       provenance: 'inductive',
       status: 'proposed',
       support: { sampleSize: input.pageCount, agreement: 1, note: SEED_NOTE } as RuleDefinition['support'],
@@ -264,7 +310,7 @@ export function synthesizeRules(input: SynthesisInput, options: SynthesisOptions
       severity: 'minor',
       weight: 0.5,
       scope: {},
-      check: { fn: 'logo.clearspace', params: { multiple: 0.5, basis: 'height' } },
+      check: { fn: 'logo.clearspace', params: { clearSpaceMultiple: 0.5, basis: 'height' } },
       provenance: 'inductive',
       status: 'proposed',
       support: {
