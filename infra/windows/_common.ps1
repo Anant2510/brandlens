@@ -421,8 +421,39 @@ function Get-JsonValue {
     foreach ($key in $Path) {
         if ($null -eq $current) { return $null }
         if ($current -is [System.Collections.IDictionary]) {
-            if (-not $current.Contains($key)) { return $null }
+            # NOT $current.Contains($key). JavaScriptSerializer returns a
+            # Dictionary[string,object], and Dictionary<K,V> implements
+            # IDictionary.Contains(object) EXPLICITLY -- so it is invisible on
+            # the concrete type, PowerShell finds no bindable one-argument
+            # overload, and the call dies with
+            #   Cannot find an overload for "Contains" and the argument count: "1".
+            # That took down both the pm2 and the /health/deep checks on a VM
+            # where every service was in fact healthy, and it could not have
+            # shown up anywhere else: on pwsh 7 the parser falls through to
+            # -AsHashtable, and a Hashtable DOES expose a public Contains.
+            # `-ccontains` is a PowerShell operator over the Keys collection,
+            # so no .NET method binding is involved, and it stays case-
+            # sensitive -- which is the whole reason this helper exists.
+            if ($current.Keys -cnotcontains $key) { return $null }
             $current = $current[$key]
+        } elseif ($current -is [System.Management.Automation.PSCustomObject]) {
+            # ConvertFrom-JsonSafe's last-resort path returns PSCustomObject.
+            # Without this the helper reports every key missing on whichever
+            # host took that path.
+            #
+            # PSCustomObject specifically, not "anything with a PSObject":
+            # every value in PowerShell has one, so the looser test would let
+            # `Get-JsonValue $doc 'name' 'Length'` return a string's length as
+            # though the JSON contained it.
+            #
+            # Property lookup here IS case-insensitive, unlike the dictionary
+            # branch. That is tolerable only because this path is unreachable
+            # for the payloads case-sensitivity was added for: ConvertFrom-Json
+            # throws on keys differing only in case, so anything that reaches
+            # here had none.
+            $property = $current.PSObject.Properties[$key]
+            if ($null -eq $property) { return $null }
+            $current = $property.Value
         } else {
             return $null
         }

@@ -200,15 +200,24 @@ if ($api.Ok) {
                     Required  = $true
                 }
             }
-            $vector = $body.components.vector.detail.driver
-            $summary = "status=$($body.status)"
+            # Get-JsonValue rather than dot notation: $body is a
+            # Dictionary[string,object], and property access on one depends on
+            # PowerShell's adapter rather than on anything guaranteed. The
+            # readiness verdict is not a place to find out which.
+            $vector = Get-JsonValue $body 'components' 'vector' 'detail' 'driver'
+            $status = Get-JsonValue $body 'status'
+            $summary = "status=$status"
             if ($vector) { $summary += ", vector=$vector" }
             if ($bad.Count -gt 0) { $summary += ", degraded: $($bad -join ', ')" }
             # A degraded readiness result is a genuine failure: it means some
             # dependency the API needs is unavailable right now.
-            Add-Check -Component 'api-deep' -Ok ($body.status -eq 'ok') -LatencyMs $deep.DurationMs -Detail $summary
+            Add-Check -Component 'api-deep' -Ok ($status -eq 'ok') -LatencyMs $deep.DurationMs -Detail $summary
         } catch {
-            Add-Check -Component 'api-deep' -Ok $false -LatencyMs $deep.DurationMs -Detail 'unparseable response'
+            # The message, not just 'unparseable response'. The generic string
+            # sent an operator looking at the API for half an hour when the
+            # fault was a PowerShell method-binding error in this script.
+            Add-Check -Component 'api-deep' -Ok $false -LatencyMs $deep.DurationMs `
+                -Detail ('could not read /health/deep: {0}' -f $_.Exception.Message)
         }
     } else {
         Add-Check -Component 'api-deep' -Ok $false -LatencyMs $deep.DurationMs `
