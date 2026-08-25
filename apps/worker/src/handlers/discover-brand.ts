@@ -28,7 +28,7 @@ import { env } from '../config';
 import { getContext } from '../context';
 import { logger } from '../logger';
 import { emitEvent } from '../services/outbox';
-import { DiscoveryBrowser, diagnoseHarvestFailure, type PageHarvest, type ViewportName } from '../services/discovery/browser';
+import { DiscoveryBrowser, classifyChallengePage, diagnoseHarvestFailure, type PageHarvest, type ViewportName } from '../services/discovery/browser';
 import { staticHarvestSite } from '../services/discovery/static-harvest';
 import { type BrandEnrichment, type BrandEnrichmentProvider, buildProviders, domainOf, enrichBrand } from '../services/discovery/brand-enrichment';
 import { mergeEnrichment } from '../services/discovery/enrichment-merge';
@@ -137,11 +137,35 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
     const harvests: PageHarvest[] = [];
     let harvested = 0;
     let failed = 0;
+    let blocked = 0;
 
     for (let entry = frontier.next(); entry; entry = frontier.next()) {
       for (const viewport of options.viewports as ViewportName[]) {
         try {
           const harvest = await browser.harvest(entry.url, viewport);
+
+          // The browser connected, but a WAF may have answered with a challenge
+          // page instead of content — HTTP 200, real DOM, entirely the wrong
+          // thing to measure. Drop it before it pollutes the corpus, and do not
+          // follow its links: a challenge page only links deeper into itself.
+          const challenge = classifyChallengePage(harvest);
+          if (challenge.isChallenge) {
+            blocked += 1;
+            log.info({ url: entry.url, reason: challenge.reason }, 'discarded a bot-challenge page');
+            await ctx.withTenant(job.orgId, (tx) =>
+              tx.insert(discoveredPages).values({
+                orgId: job.orgId,
+                discoveryRunId: run.id,
+                url: entry.url,
+                depth: entry.depth,
+                role: entry.role,
+                viewport,
+                error: `bot challenge: ${challenge.reason}`,
+              }).onConflictDoNothing(),
+            );
+            continue;
+          }
+
           harvests.push(harvest);
 
           const stored = await storeHarvestedPage(ctx, job.orgId, run.id, harvest, entry, viewport);
@@ -181,6 +205,18 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
     }
 
     await browser.close();
+
+    if (blocked > 0) {
+      // Surfaced, not swallowed: a run that silently dropped six pages would
+      // look like a thin site rather than a defended one.
+      stageErrors.push({
+        stage: 'harvesting',
+        message:
+          `${blocked} page(s) were bot-challenge interstitials (e.g. an Akamai/Cloudflare "access denied" ` +
+          'or CAPTCHA page) served instead of content, and were discarded so they could not be measured as ' +
+          'brand copy or colour.',
+      });
+    }
 
     let staticFallbackUsed = false;
     if (harvests.length === 0) {

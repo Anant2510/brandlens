@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diagnoseHarvestFailure, isHttp2ProtocolError, isLikelyLogo } from './browser';
+import { classifyChallengePage, diagnoseHarvestFailure, isHttp2ProtocolError, isLikelyLogo } from './browser';
 
 describe('isHttp2ProtocolError', () => {
   /*
@@ -132,5 +132,47 @@ describe('diagnoseHarvestFailure', () => {
     // origin happens to be reachable — that would cry wolf on every render bug.
     const d = await diagnoseHarvestFailure('https://x/', new Error('page.evaluate: something threw'), reached);
     expect(d.kind).toBe('unknown');
+  });
+});
+
+describe('classifyChallengePage', () => {
+  const page = (over: Partial<Parameters<typeof classifyChallengePage>[0]>) =>
+    classifyChallengePage({ finalUrl: 'https://www.academy.com/x', title: 'Home', bodyText: 'x'.repeat(2000), httpStatus: 200, ...over });
+
+  it('catches the exact academy.com case: a captcha challenge URL titled access denied', () => {
+    // Six of eight harvested "pages" were this — HTTP 200, real DOM, the wrong
+    // thing to measure.
+    const v = classifyChallengePage({
+      finalUrl: 'https://www.academy.com/captcha/knfjvdun/challenge.html',
+      title: 'Access to this page has been denied.',
+      bodyText: 'Access to this page has been denied because we believe you are using automation tools.',
+      httpStatus: 200,
+    });
+    expect(v.isChallenge).toBe(true);
+    expect(v.reason).toContain('challenge URL');
+  });
+
+  it('catches the major WAF interstitials by title', () => {
+    for (const title of ['Just a moment...', 'Attention Required! | Cloudflare', 'Pardon Our Interruption', 'Access Denied']) {
+      expect({ title, hit: page({ finalUrl: 'https://x.com/', title }).isChallenge }).toMatchObject({ hit: true });
+    }
+  });
+
+  it('catches a thin body full of challenge markers even when the title looks innocent', () => {
+    const v = page({ title: 'Loading', bodyText: 'Please enable JavaScript and cookies to continue. Ray ID: 8f2c1a9b. Performance & security by Cloudflare.' });
+    expect(v.isChallenge).toBe(true);
+  });
+
+  it('does NOT condemn a real page that merely mentions a WAF in its copy', () => {
+    // A long marketing/engineering page about security is content, not a wall.
+    const v = page({
+      title: 'How we use Cloudflare to keep you safe',
+      bodyText: 'Our engineering team writes about access control and bot mitigation. '.repeat(60),
+    });
+    expect(v.isChallenge).toBe(false);
+  });
+
+  it('passes an ordinary brand page through', () => {
+    expect(page({ finalUrl: 'https://www.academy.com/c/hot-deals', title: 'Hot Deals & Special Offers | Academy' }).isChallenge).toBe(false);
   });
 });

@@ -41,6 +41,65 @@ export function isHttp2ProtocolError(error: unknown): boolean {
 }
 
 /* --------------------------------------------------------------------------
+ * Recognising a bot-challenge page the browser was served instead of content.
+ *
+ * A site can let the browser CONNECT and then answer with a WAF interstitial —
+ * an Akamai "Access Denied", a Cloudflare "Just a moment", a PerimeterX
+ * "Pardon Our Interruption", a CAPTCHA challenge. These come back HTTP 200
+ * with a real DOM, so the harvester renders them happily and, unfiltered,
+ * measures the denial page's colours and copy as if they were the brand's.
+ * academy.com did exactly this: six of eight crawled URLs were
+ * `/captcha/…/challenge.html` titled "Access to this page has been denied",
+ * and the copy readability finding was scoring that page's text.
+ *
+ * So a harvested page is checked against the known challenge signatures and,
+ * when it matches, dropped: not measured, not stored, and its links not
+ * followed — because a challenge page's only links lead deeper into the
+ * challenge. Detection is deliberately conservative (specific WAF phrases and
+ * URL markers, not the bare word "denied") so a real page that happens to
+ * discuss access control is not thrown away.
+ * ------------------------------------------------------------------------ */
+const CHALLENGE_URL = /\/(captcha|challenge|_sec\/|cdn-cgi\/challenge|px\/captcha|akam\/|_Incapsula_)/i;
+const CHALLENGE_TITLE =
+  /access (to this page has been )?denied|access denied|attention required|just a moment|pardon our interruption|are you a (human|robot)|verify you are human|checking your browser|before you continue|security check|request unsuccessful|bot verification/i;
+const CHALLENGE_BODY =
+  /(enable javascript and cookies to continue|performance & security by cloudflare|why (have i been blocked|do i have to complete a captcha)|reference ?id ?:?\s*#?[0-9a-f-]{6,}|ray id|akamai|perimeterx|please verify you are a human|complete the (security )?check to access)/i;
+
+export interface ChallengeVerdict {
+  isChallenge: boolean;
+  /** The signal that matched, for the report. */
+  reason: string;
+}
+
+/**
+ * Whether a harvested page is a bot-mitigation interstitial, not content.
+ * Needs two independent signals OR one very specific one, so a stray phrase in
+ * real body copy cannot condemn a genuine page.
+ */
+export function classifyChallengePage(page: {
+  finalUrl: string;
+  title: string | null;
+  bodyText: string;
+  httpStatus: number | null;
+}): ChallengeVerdict {
+  const urlHit = CHALLENGE_URL.test(page.finalUrl);
+  const titleHit = CHALLENGE_TITLE.test(page.title ?? '');
+  // Only the first slice of body text — a challenge page is short and says so
+  // immediately; scanning a whole marketing page invites false positives.
+  const bodyHit = CHALLENGE_BODY.test(page.bodyText.slice(0, 4000));
+  const thin = page.bodyText.trim().length < 1200;
+
+  // A challenge URL, or a title that names the block, is decisive on its own —
+  // these are unambiguous. A body marker needs corroboration (a matching title
+  // or a suspiciously thin page) so a normal page mentioning "Cloudflare" in an
+  // engineering blog post is not discarded.
+  if (urlHit) return { isChallenge: true, reason: `challenge URL (${new URL(page.finalUrl).pathname})` };
+  if (titleHit) return { isChallenge: true, reason: `challenge title (${(page.title ?? '').slice(0, 60)})` };
+  if (bodyHit && thin) return { isChallenge: true, reason: 'challenge-page body markers on a near-empty page' };
+  return { isChallenge: false, reason: '' };
+}
+
+/* --------------------------------------------------------------------------
  * Telling apart the three ways harvesting fails.
  *
  * A page.goto that throws has told us almost nothing on its own: a reset
