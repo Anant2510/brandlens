@@ -234,6 +234,15 @@ export const DiscoveryOptions = z.object({
   crawlDelayMs: z.number().int().min(0).max(10_000).default(500),
   /** Run the 40 analyzers over the harvested pages after inducing rules. */
   runSelfCheck: z.boolean().default(true),
+  /**
+   * When a site refuses the rendered browser but still serves plain HTTP,
+   * read the ontology from the HTML it serves rather than failing. On by
+   * default: a brand should be analysable even when its marketing site runs a
+   * bot wall. Uses only the open channel, identifies honestly, obeys robots —
+   * it does not defeat the bot mitigation, and a site that closes the plain
+   * channel too still fails with the "upload the brand book" hint.
+   */
+  staticFallback: z.boolean().default(true),
   /** Attach to an existing brand instead of creating one. */
   brandId: z.string().uuid().nullish(),
 });
@@ -412,6 +421,13 @@ export const DiscoveryReport = z.object({
     pagesFailed: z.number().int(),
     /** Named explicitly so the report never implies coverage it did not have. */
     skipped: z.array(z.object({ url: z.string(), reason: z.string() })).default([]),
+    /**
+     * How the pages were read. `rendered` is the full headless-browser harvest;
+     * `static` means the site refused the browser and the ontology was read
+     * from the HTML it serves — colours and type are declared, not measured, so
+     * the whole report is lower-confidence and the UI says so.
+     */
+    harvestMode: z.enum(['rendered', 'static']).default('rendered'),
   }),
 });
 export type DiscoveryReport = z.infer<typeof DiscoveryReport>;

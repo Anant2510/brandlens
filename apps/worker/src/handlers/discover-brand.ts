@@ -29,6 +29,7 @@ import { getContext } from '../context';
 import { logger } from '../logger';
 import { emitEvent } from '../services/outbox';
 import { DiscoveryBrowser, diagnoseHarvestFailure, type PageHarvest, type ViewportName } from '../services/discovery/browser';
+import { staticHarvestSite } from '../services/discovery/static-harvest';
 import { CrawlFrontier } from '../services/discovery/frontier';
 import {
   extractPalette,
@@ -179,21 +180,54 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
 
     await browser.close();
 
+    let staticFallbackUsed = false;
     if (harvests.length === 0) {
-      // Turn the raw navigation error into something a person can act on. A
-      // bot wall, an outage and a slow site all throw here, and only a plain
-      // probe of the origin tells them apart — so this is where "Timeout
-      // 30000ms exceeded" becomes "this site refuses automated browsers".
+      // The rendered harvest got nothing. Before giving up, work out WHY, and
+      // if the site refuses the browser but still serves plain HTTP, harvest
+      // what it does serve. A bot wall, an outage and a slow site all throw at
+      // page.goto; only a plain probe of the origin tells them apart.
       const firstError = stageErrors.find((e) => e.stage === 'harvesting')?.message ?? 'the site returned no renderable pages';
       const diagnosis = await diagnoseHarvestFailure(run.originUrl, new Error(firstError));
-      log.warn({ diagnosis, originUrl: run.originUrl }, 'harvest produced nothing');
-      // Record the machine-readable kind so a future UI can badge it; the
-      // stageErrors array is jsonb and takes the extra entry without a migration.
-      stageErrors.unshift({ stage: 'harvesting', message: `diagnosis:${diagnosis.kind}` });
-      throw new Error(
-        `Nothing could be harvested from ${run.originUrl}. ${diagnosis.hint}` +
-          (diagnosis.kind === 'bot-refused' ? '' : ` (${diagnosis.detail})`),
-      );
+      log.warn({ diagnosis, originUrl: run.originUrl }, 'rendered harvest produced nothing');
+
+      if (diagnosis.kind === 'bot-refused' && options.staticFallback) {
+        // The origin answered a plain request, so read the ontology from the
+        // HTML it serves. This is the channel the site keeps open, taken
+        // honestly — see static-harvest.ts on why that is not evasion.
+        await setStage('harvesting', 0.5, { note: 'browser refused; reading served HTML' });
+        const staticPages = await staticHarvestSite(run.seedUrl, {
+          maxPages: options.maxPages,
+          crawlDelayMs: politeDelay,
+          isAllowed: options.respectRobots ? (url) => isAllowed(robots, 'brandlens-discovery', url) : undefined,
+          sleep,
+        });
+        for (const page of staticPages) {
+          harvests.push(page);
+          await storeHarvestedPage(ctx, job.orgId, run.id, page, { depth: 0, role: 'seed' }, 'desktop');
+          harvested += 1;
+        }
+        if (staticPages.length > 0) {
+          staticFallbackUsed = true;
+          stageErrors.push({
+            stage: 'harvesting',
+            message:
+              `This site refused the rendered browser, so ${staticPages.length} page(s) were read from the ` +
+              'HTML it serves to a plain request. Colours and type are read from the CSS, not measured from a ' +
+              'render, so treat them as lower-confidence until reviewed.',
+          });
+          log.info({ pages: staticPages.length, originUrl: run.originUrl }, 'static fallback harvested pages');
+        }
+      }
+
+      if (harvests.length === 0) {
+        // Even the plain channel gave nothing, or the failure was not a bot
+        // wall. Record the machine-readable kind and fail with the honest hint.
+        stageErrors.unshift({ stage: 'harvesting', message: `diagnosis:${diagnosis.kind}` });
+        throw new Error(
+          `Nothing could be harvested from ${run.originUrl}. ${diagnosis.hint}` +
+            (diagnosis.kind === 'bot-refused' ? '' : ` (${diagnosis.detail})`),
+        );
+      }
     }
 
     /* ============================================================ EXTRACT */
@@ -367,6 +401,7 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
         // implied it had seen the site would be the most damaging kind of
         // wrong: confident, tidy, and missing the evidence that mattered.
         skipped: frontier.skipped().map((e) => ({ url: e.url, reason: 'crawl budget reached' })),
+        harvestMode: staticFallbackUsed ? 'static' : 'rendered',
       },
     };
 
@@ -454,10 +489,10 @@ async function storeHarvestedPage(
   entry: { depth: number; role: string },
   viewport: ViewportName,
 ): Promise<boolean> {
-  const hash = contentHash(harvest.screenshot);
-  const key = ctx.storage.keyFor('originals', orgId, hash, 'png');
-  await ctx.storage.put(key, harvest.screenshot);
-
+  // A rendered page arrives as a PNG; a static-harvest page has no pixels and
+  // arrives as its structured source. Store whichever it is, so the asset row
+  // is honest about what was captured rather than carrying a 0-byte image.
+  const rendered = harvest.screenshot.byteLength > 0;
   const structured = {
     url: harvest.finalUrl,
     viewport,
@@ -466,6 +501,10 @@ async function storeHarvestedPage(
     images: harvest.images,
     lang: harvest.lang,
   };
+  const payload = rendered ? harvest.screenshot : Buffer.from(JSON.stringify(structured), 'utf8');
+  const hash = contentHash(payload);
+  const key = ctx.storage.keyFor('originals', orgId, hash, rendered ? 'png' : 'json');
+  await ctx.storage.put(key, payload);
 
   return ctx.withTenant(orgId, async (tx) => {
     const [brand] = await tx.select({ id: brands.id }).from(brands).limit(1);
@@ -481,8 +520,8 @@ async function storeHarvestedPage(
         status: 'ingested',
         contentHash: hash,
         storageKey: key,
-        mimeType: 'image/png',
-        byteSize: harvest.screenshot.byteLength,
+        mimeType: rendered ? 'image/png' : 'application/json',
+        byteSize: payload.byteLength,
         width: harvest.screenshotWidth,
         height: harvest.screenshotHeight,
         sourceFidelity: 'structured',
@@ -491,7 +530,7 @@ async function storeHarvestedPage(
         assetType: 'webpage',
         locale: harvest.lang ?? null,
         copyFields: { body: harvest.bodyText.slice(0, 8000), title: harvest.title ?? '' },
-        tags: ['discovery', viewport],
+        tags: rendered ? ['discovery', viewport] : ['discovery', viewport, 'static'],
       })
       .returning({ id: assets.id });
 
