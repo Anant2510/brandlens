@@ -30,6 +30,8 @@ import { logger } from '../logger';
 import { emitEvent } from '../services/outbox';
 import { DiscoveryBrowser, diagnoseHarvestFailure, type PageHarvest, type ViewportName } from '../services/discovery/browser';
 import { staticHarvestSite } from '../services/discovery/static-harvest';
+import { type BrandEnrichment, type BrandEnrichmentProvider, buildProviders, domainOf, enrichBrand } from '../services/discovery/brand-enrichment';
+import { mergeEnrichment } from '../services/discovery/enrichment-merge';
 import { CrawlFrontier } from '../services/discovery/frontier';
 import {
   extractPalette,
@@ -236,16 +238,49 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
     const desktop = harvests.filter((h) => h.screenshotWidth > 800);
     const corpus = desktop.length > 0 ? desktop : harvests;
 
-    const palette = extractPalette(corpus.map((h) => ({ url: h.finalUrl, colors: h.colors })));
-    const styles = extractTypeStyles(corpus.map((h) => ({ url: h.finalUrl, runs: h.textRuns })));
+    let palette = extractPalette(corpus.map((h) => ({ url: h.finalUrl, colors: h.colors })));
+    let styles = extractTypeStyles(corpus.map((h) => ({ url: h.finalUrl, runs: h.textRuns })));
     const contrastFailures = findContrastFailures(corpus.map((h) => ({ url: h.finalUrl, runs: h.textRuns })));
-    const logos = rankLogoCandidates(corpus.flatMap((h) => h.logoCandidates)).slice(0, 5);
+    let logos = rankLogoCandidates(corpus.flatMap((h) => h.logoCandidates)).slice(0, 5);
+
+    /* --- Brand-data enrichment --------------------------------------------
+     * Fetch the brand's identity from a provider that indexes it BY DOMAIN and
+     * fold it in. Runs on every discovery when a key is configured, and is the
+     * only source that covers a JS-only SPA — it never touches the site, so it
+     * works regardless of what the site does to crawlers. It ADDS candidates;
+     * anything the crawl measured on the live site keeps precedence.
+     * -------------------------------------------------------------------- */
+    let enrichmentProvider: string | null = null;
+    const providers = buildProviders({ brandfetchApiKey: env.BRANDFETCH_API_KEY, logoDevToken: env.LOGODEV_TOKEN });
+    if (providers.length > 0) {
+      const domain = domainOf(run.originUrl);
+      if (domain) {
+        const enrichment = await getCachedEnrichment(ctx, job.orgId, domain, providers).catch((err) => {
+          log.warn({ err }, 'brand enrichment failed; discovery keeps its crawled identity');
+          return null;
+        });
+        if (enrichment) {
+          const merged = mergeEnrichment(palette, styles, logos, enrichment);
+          palette = merged.colors;
+          styles = merged.typeStyles;
+          logos = merged.logos.slice(0, 6);
+          enrichmentProvider = enrichment.provider;
+          stageErrors.push({
+            stage: 'extracting',
+            message:
+              `Enriched with brand data from ${enrichment.provider}: ${enrichment.colors.length} colour(s), ` +
+              `${enrichment.fonts.length} font(s), ${enrichment.logos.length} logo(s). These are candidate ` +
+              'identity from a third-party record — the crawl keeps precedence where the two agree.',
+          });
+        }
+      }
+    }
 
     const brandName = deriveBrandName(corpus, run.originUrl);
     const brandId = await ensureBrand(ctx, job.orgId, options.brandId ?? run.brandId, brandName, run.originUrl, corpus);
 
     await persistIdentity(ctx, job.orgId, brandId, palette, styles, logos);
-    await setStage('extracting', 0.6, { brandId, tokensProposed: palette.length });
+    await setStage('extracting', 0.6, { brandId, tokensProposed: palette.length, enrichedBy: enrichmentProvider });
 
     /* --- The copy pass ----------------------------------------------------
      * Voice, lexicon, claims and disclaimers. Wrapped in its own try/catch
@@ -481,6 +516,51 @@ type Ctx = ReturnType<typeof getContext>;
  * and finding works on a discovered page with no special-casing, and the
  * computed styles it carries are exact values rather than pixel inference.
  */
+/**
+ * Enrichment for one domain, from a durable per-domain cache.
+ *
+ * The cache exists to respect the provider's quota — Brandfetch's free tier is
+ * 100 fetches a month — so re-running discovery on the same brand does not
+ * spend one. It lives in object storage keyed by domain, survives a worker
+ * restart, and carries its own fetch timestamp so a stale record is refreshed
+ * rather than trusted forever. A brand's identity is stable, so the TTL is
+ * generous.
+ */
+async function getCachedEnrichment(
+  ctx: Ctx,
+  orgId: string,
+  domain: string,
+  providers: BrandEnrichmentProvider[],
+): Promise<BrandEnrichment | null> {
+  const key = ctx.storage.keyFor('derivatives', orgId, contentHash(Buffer.from(`enrichment:${domain}`)), 'json');
+  const ttlMs = env.ENRICHMENT_CACHE_TTL_HOURS * 3_600_000;
+
+  if (await ctx.storage.exists(key)) {
+    try {
+      const cached = JSON.parse((await ctx.storage.readOrFetch(key)).toString('utf8')) as {
+        fetchedAt: number;
+        enrichment: BrandEnrichment | null;
+      };
+      if (Date.now() - cached.fetchedAt < ttlMs) {
+        logger.info({ domain }, 'brand enrichment served from cache (no provider fetch)');
+        return cached.enrichment;
+      }
+    } catch {
+      // A corrupt cache entry is not worth failing over — fall through and
+      // refetch, which overwrites it.
+    }
+  }
+
+  const enrichment = await enrichBrand(domain, providers);
+  // Cache the miss too: a domain the provider has no record for should not be
+  // asked again on every re-run. `enrichment` is null there, and null is a
+  // valid, quota-saving cache value.
+  await ctx.storage
+    .put(key, Buffer.from(JSON.stringify({ fetchedAt: Date.now(), enrichment })))
+    .catch((err) => logger.warn({ err }, 'could not write enrichment cache'));
+  return enrichment;
+}
+
 async function storeHarvestedPage(
   ctx: Ctx,
   orgId: string,
