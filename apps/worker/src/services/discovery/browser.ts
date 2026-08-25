@@ -18,6 +18,28 @@ export const DISCOVERY_USER_AGENT = 'brandlens-discovery';
 export const FULL_USER_AGENT =
   'Mozilla/5.0 (compatible; brandlens-discovery/1.0; +https://github.com/brandlens/brandlens#discovery)';
 
+/**
+ * Chromium reporting that an HTTP/2 connection died mid-stream.
+ *
+ * This is not a 403, a timeout, or a missing page. The TLS handshake succeeded
+ * and then the h2 stream was reset, which happens for two reasons that look
+ * identical from here: a TLS-inspecting proxy re-encrypting traffic and
+ * mangling the framing on the way through -- the normal state of affairs on a
+ * corporate network -- or an edge whose h2 configuration Chromium disagrees
+ * with. Either way the site is reachable and willing; only the protocol is
+ * failing, and HTTP/1.1 to the same host returns 200.
+ *
+ * Worth being precise about what this is NOT: it is not a way past a site that
+ * has decided to refuse a crawler. A WAF turning an identified bot away
+ * answers 403, and the honest response to a 403 is to stop.
+ */
+export function isHttp2ProtocolError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  // ERR_SPDY_PROTOCOL_ERROR is the same failure under Chromium's older name
+  // for the stack, still emitted by some builds.
+  return /ERR_HTTP2_PROTOCOL_ERROR|ERR_SPDY_PROTOCOL_ERROR/.test(message);
+}
+
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, isMobile: false, deviceScaleFactor: 1 },
   mobile: { width: 390, height: 844, isMobile: true, deviceScaleFactor: 2 },
@@ -262,6 +284,17 @@ function collectFromDom() {
 
 export class DiscoveryBrowser {
   private browser: Browser | null = null;
+  /**
+   * A second Chromium that speaks only HTTP/1.1, launched on demand.
+   *
+   * `--disable-http2` is a process-level switch: Chromium negotiates the
+   * protocol by ALPN at connection time and there is no per-page or
+   * per-context override. So recovering from a protocol error means a separate
+   * browser, and it is worth the ~100MB of RSS only on the runs that need it.
+   */
+  private http1Only: Browser | null = null;
+  /** True when every navigation should skip h2 from the start. */
+  private readonly forceHttp1 = /^(1|true|yes)$/i.test(process.env.DISCOVERY_DISABLE_HTTP2?.trim() ?? '');
 
   /**
    * Chromium is resolved from PLAYWRIGHT_BROWSERS_PATH when set, which is how
@@ -270,7 +303,14 @@ export class DiscoveryBrowser {
    */
   async launch(): Promise<void> {
     if (this.browser) return;
+    this.browser = await this.spawn(this.forceHttp1);
+    if (this.forceHttp1) {
+      this.http1Only = this.browser;
+      logger.info({ reason: 'DISCOVERY_DISABLE_HTTP2' }, 'discovery browser is HTTP/1.1 only');
+    }
+  }
 
+  private async spawn(disableHttp2: boolean): Promise<Browser> {
     let chromium: typeof import('playwright').chromium;
     try {
       ({ chromium } = await import('playwright'));
@@ -289,13 +329,11 @@ export class DiscoveryBrowser {
     // build-number match is not a reasonable ask. This is also how an operator
     // points at a Chrome the organisation already manages.
     const executablePath = process.env.DISCOVERY_BROWSER_EXECUTABLE?.trim() || undefined;
+    const args = ['--disable-dev-shm-usage', '--disable-gpu', '--no-sandbox'];
+    if (disableHttp2) args.push('--disable-http2');
 
     try {
-      this.browser = await chromium.launch({
-        headless: true,
-        executablePath,
-        args: ['--disable-dev-shm-usage', '--disable-gpu', '--no-sandbox'],
-      });
+      return await chromium.launch({ headless: true, executablePath, args });
     } catch (err) {
       throw new Error(
         'Chromium failed to launch. Install it with ' +
@@ -306,15 +344,29 @@ export class DiscoveryBrowser {
     }
   }
 
-  async close(): Promise<void> {
-    await this.browser?.close().catch(() => undefined);
-    this.browser = null;
+  /** The HTTP/1.1-only browser, launched the first time something needs it. */
+  private async http1Browser(): Promise<Browser> {
+    if (!this.http1Only) {
+      this.http1Only = await this.spawn(true);
+      logger.warn(
+        {},
+        'HTTP/2 failed against a reachable host; retrying over HTTP/1.1. Set DISCOVERY_DISABLE_HTTP2=1 ' +
+          'to skip the failed attempt on every page if this is persistent on your network.',
+      );
+    }
+    return this.http1Only;
   }
 
-  private async context(viewport: ViewportName): Promise<BrowserContext> {
-    if (!this.browser) throw new Error('Browser not launched');
+  async close(): Promise<void> {
+    const both = [this.browser, this.http1Only === this.browser ? null : this.http1Only];
+    this.browser = null;
+    this.http1Only = null;
+    for (const browser of both) await browser?.close().catch(() => undefined);
+  }
+
+  private async context(browser: Browser, viewport: ViewportName): Promise<BrowserContext> {
     const vp = VIEWPORTS[viewport];
-    return this.browser.newContext({
+    return browser.newContext({
       viewport: { width: vp.width, height: vp.height },
       deviceScaleFactor: vp.deviceScaleFactor,
       isMobile: vp.isMobile,
@@ -332,8 +384,27 @@ export class DiscoveryBrowser {
 
   /** Renders one page and returns everything discovery needs from it. */
   async harvest(url: string, viewport: ViewportName, timeoutMs = 30_000): Promise<PageHarvest> {
+    if (!this.browser) throw new Error('Browser not launched');
+    try {
+      return await this.render(this.browser, url, viewport, timeoutMs);
+    } catch (err) {
+      // Retry ONLY this one failure, and only once. A host that answers 403,
+      // times out, or serves an error page has told us something, and repeating
+      // the request over a different protocol would just be ignoring it.
+      if (!isHttp2ProtocolError(err) || this.http1Only === this.browser) throw err;
+      logger.warn({ url, error: err instanceof Error ? err.message : String(err) }, 'http2 navigation failed');
+      return await this.render(await this.http1Browser(), url, viewport, timeoutMs);
+    }
+  }
+
+  private async render(
+    browser: Browser,
+    url: string,
+    viewport: ViewportName,
+    timeoutMs: number,
+  ): Promise<PageHarvest> {
     const started = Date.now();
-    const context = await this.context(viewport);
+    const context = await this.context(browser, viewport);
     let page: Page | null = null;
 
     try {
