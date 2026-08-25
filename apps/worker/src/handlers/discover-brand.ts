@@ -28,7 +28,10 @@ import { env } from '../config';
 import { getContext } from '../context';
 import { logger } from '../logger';
 import { emitEvent } from '../services/outbox';
-import { DiscoveryBrowser, type PageHarvest, type ViewportName } from '../services/discovery/browser';
+import { DiscoveryBrowser, diagnoseHarvestFailure, type PageHarvest, type ViewportName } from '../services/discovery/browser';
+import { staticHarvestSite } from '../services/discovery/static-harvest';
+import { type BrandEnrichment, type BrandEnrichmentProvider, buildProviders, domainOf, enrichBrand } from '../services/discovery/brand-enrichment';
+import { mergeEnrichment } from '../services/discovery/enrichment-merge';
 import { CrawlFrontier } from '../services/discovery/frontier';
 import {
   extractPalette,
@@ -179,11 +182,54 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
 
     await browser.close();
 
+    let staticFallbackUsed = false;
     if (harvests.length === 0) {
-      throw new Error(
-        `Nothing could be harvested from ${run.originUrl}. ` +
-          (stageErrors[0]?.message ?? 'The site returned no renderable pages.'),
-      );
+      // The rendered harvest got nothing. Before giving up, work out WHY, and
+      // if the site refuses the browser but still serves plain HTTP, harvest
+      // what it does serve. A bot wall, an outage and a slow site all throw at
+      // page.goto; only a plain probe of the origin tells them apart.
+      const firstError = stageErrors.find((e) => e.stage === 'harvesting')?.message ?? 'the site returned no renderable pages';
+      const diagnosis = await diagnoseHarvestFailure(run.originUrl, new Error(firstError));
+      log.warn({ diagnosis, originUrl: run.originUrl }, 'rendered harvest produced nothing');
+
+      if (diagnosis.kind === 'bot-refused' && options.staticFallback) {
+        // The origin answered a plain request, so read the ontology from the
+        // HTML it serves. This is the channel the site keeps open, taken
+        // honestly — see static-harvest.ts on why that is not evasion.
+        await setStage('harvesting', 0.5, { note: 'browser refused; reading served HTML' });
+        const staticPages = await staticHarvestSite(run.seedUrl, {
+          maxPages: options.maxPages,
+          crawlDelayMs: politeDelay,
+          isAllowed: options.respectRobots ? (url) => isAllowed(robots, 'brandlens-discovery', url) : undefined,
+          sleep,
+        });
+        for (const page of staticPages) {
+          harvests.push(page);
+          await storeHarvestedPage(ctx, job.orgId, run.id, page, { depth: 0, role: 'seed' }, 'desktop');
+          harvested += 1;
+        }
+        if (staticPages.length > 0) {
+          staticFallbackUsed = true;
+          stageErrors.push({
+            stage: 'harvesting',
+            message:
+              `This site refused the rendered browser, so ${staticPages.length} page(s) were read from the ` +
+              'HTML it serves to a plain request. Colours and type are read from the CSS, not measured from a ' +
+              'render, so treat them as lower-confidence until reviewed.',
+          });
+          log.info({ pages: staticPages.length, originUrl: run.originUrl }, 'static fallback harvested pages');
+        }
+      }
+
+      if (harvests.length === 0) {
+        // Even the plain channel gave nothing, or the failure was not a bot
+        // wall. Record the machine-readable kind and fail with the honest hint.
+        stageErrors.unshift({ stage: 'harvesting', message: `diagnosis:${diagnosis.kind}` });
+        throw new Error(
+          `Nothing could be harvested from ${run.originUrl}. ${diagnosis.hint}` +
+            (diagnosis.kind === 'bot-refused' ? '' : ` (${diagnosis.detail})`),
+        );
+      }
     }
 
     /* ============================================================ EXTRACT */
@@ -192,16 +238,49 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
     const desktop = harvests.filter((h) => h.screenshotWidth > 800);
     const corpus = desktop.length > 0 ? desktop : harvests;
 
-    const palette = extractPalette(corpus.map((h) => ({ url: h.finalUrl, colors: h.colors })));
-    const styles = extractTypeStyles(corpus.map((h) => ({ url: h.finalUrl, runs: h.textRuns })));
+    let palette = extractPalette(corpus.map((h) => ({ url: h.finalUrl, colors: h.colors })));
+    let styles = extractTypeStyles(corpus.map((h) => ({ url: h.finalUrl, runs: h.textRuns })));
     const contrastFailures = findContrastFailures(corpus.map((h) => ({ url: h.finalUrl, runs: h.textRuns })));
-    const logos = rankLogoCandidates(corpus.flatMap((h) => h.logoCandidates)).slice(0, 5);
+    let logos = rankLogoCandidates(corpus.flatMap((h) => h.logoCandidates)).slice(0, 5);
+
+    /* --- Brand-data enrichment --------------------------------------------
+     * Fetch the brand's identity from a provider that indexes it BY DOMAIN and
+     * fold it in. Runs on every discovery when a key is configured, and is the
+     * only source that covers a JS-only SPA — it never touches the site, so it
+     * works regardless of what the site does to crawlers. It ADDS candidates;
+     * anything the crawl measured on the live site keeps precedence.
+     * -------------------------------------------------------------------- */
+    let enrichmentProvider: string | null = null;
+    const providers = buildProviders({ brandfetchApiKey: env.BRANDFETCH_API_KEY, logoDevToken: env.LOGODEV_TOKEN });
+    if (providers.length > 0) {
+      const domain = domainOf(run.originUrl);
+      if (domain) {
+        const enrichment = await getCachedEnrichment(ctx, job.orgId, domain, providers).catch((err) => {
+          log.warn({ err }, 'brand enrichment failed; discovery keeps its crawled identity');
+          return null;
+        });
+        if (enrichment) {
+          const merged = mergeEnrichment(palette, styles, logos, enrichment);
+          palette = merged.colors;
+          styles = merged.typeStyles;
+          logos = merged.logos.slice(0, 6);
+          enrichmentProvider = enrichment.provider;
+          stageErrors.push({
+            stage: 'extracting',
+            message:
+              `Enriched with brand data from ${enrichment.provider}: ${enrichment.colors.length} colour(s), ` +
+              `${enrichment.fonts.length} font(s), ${enrichment.logos.length} logo(s). These are candidate ` +
+              'identity from a third-party record — the crawl keeps precedence where the two agree.',
+          });
+        }
+      }
+    }
 
     const brandName = deriveBrandName(corpus, run.originUrl);
     const brandId = await ensureBrand(ctx, job.orgId, options.brandId ?? run.brandId, brandName, run.originUrl, corpus);
 
     await persistIdentity(ctx, job.orgId, brandId, palette, styles, logos);
-    await setStage('extracting', 0.6, { brandId, tokensProposed: palette.length });
+    await setStage('extracting', 0.6, { brandId, tokensProposed: palette.length, enrichedBy: enrichmentProvider });
 
     /* --- The copy pass ----------------------------------------------------
      * Voice, lexicon, claims and disclaimers. Wrapped in its own try/catch
@@ -357,6 +436,7 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
         // implied it had seen the site would be the most damaging kind of
         // wrong: confident, tidy, and missing the evidence that mattered.
         skipped: frontier.skipped().map((e) => ({ url: e.url, reason: 'crawl budget reached' })),
+        harvestMode: staticFallbackUsed ? 'static' : 'rendered',
       },
     };
 
@@ -436,6 +516,51 @@ type Ctx = ReturnType<typeof getContext>;
  * and finding works on a discovered page with no special-casing, and the
  * computed styles it carries are exact values rather than pixel inference.
  */
+/**
+ * Enrichment for one domain, from a durable per-domain cache.
+ *
+ * The cache exists to respect the provider's quota — Brandfetch's free tier is
+ * 100 fetches a month — so re-running discovery on the same brand does not
+ * spend one. It lives in object storage keyed by domain, survives a worker
+ * restart, and carries its own fetch timestamp so a stale record is refreshed
+ * rather than trusted forever. A brand's identity is stable, so the TTL is
+ * generous.
+ */
+async function getCachedEnrichment(
+  ctx: Ctx,
+  orgId: string,
+  domain: string,
+  providers: BrandEnrichmentProvider[],
+): Promise<BrandEnrichment | null> {
+  const key = ctx.storage.keyFor('derivatives', orgId, contentHash(Buffer.from(`enrichment:${domain}`)), 'json');
+  const ttlMs = env.ENRICHMENT_CACHE_TTL_HOURS * 3_600_000;
+
+  if (await ctx.storage.exists(key)) {
+    try {
+      const cached = JSON.parse((await ctx.storage.readOrFetch(key)).toString('utf8')) as {
+        fetchedAt: number;
+        enrichment: BrandEnrichment | null;
+      };
+      if (Date.now() - cached.fetchedAt < ttlMs) {
+        logger.info({ domain }, 'brand enrichment served from cache (no provider fetch)');
+        return cached.enrichment;
+      }
+    } catch {
+      // A corrupt cache entry is not worth failing over — fall through and
+      // refetch, which overwrites it.
+    }
+  }
+
+  const enrichment = await enrichBrand(domain, providers);
+  // Cache the miss too: a domain the provider has no record for should not be
+  // asked again on every re-run. `enrichment` is null there, and null is a
+  // valid, quota-saving cache value.
+  await ctx.storage
+    .put(key, Buffer.from(JSON.stringify({ fetchedAt: Date.now(), enrichment })))
+    .catch((err) => logger.warn({ err }, 'could not write enrichment cache'));
+  return enrichment;
+}
+
 async function storeHarvestedPage(
   ctx: Ctx,
   orgId: string,
@@ -444,10 +569,10 @@ async function storeHarvestedPage(
   entry: { depth: number; role: string },
   viewport: ViewportName,
 ): Promise<boolean> {
-  const hash = contentHash(harvest.screenshot);
-  const key = ctx.storage.keyFor('originals', orgId, hash, 'png');
-  await ctx.storage.put(key, harvest.screenshot);
-
+  // A rendered page arrives as a PNG; a static-harvest page has no pixels and
+  // arrives as its structured source. Store whichever it is, so the asset row
+  // is honest about what was captured rather than carrying a 0-byte image.
+  const rendered = harvest.screenshot.byteLength > 0;
   const structured = {
     url: harvest.finalUrl,
     viewport,
@@ -456,6 +581,10 @@ async function storeHarvestedPage(
     images: harvest.images,
     lang: harvest.lang,
   };
+  const payload = rendered ? harvest.screenshot : Buffer.from(JSON.stringify(structured), 'utf8');
+  const hash = contentHash(payload);
+  const key = ctx.storage.keyFor('originals', orgId, hash, rendered ? 'png' : 'json');
+  await ctx.storage.put(key, payload);
 
   return ctx.withTenant(orgId, async (tx) => {
     const [brand] = await tx.select({ id: brands.id }).from(brands).limit(1);
@@ -471,8 +600,8 @@ async function storeHarvestedPage(
         status: 'ingested',
         contentHash: hash,
         storageKey: key,
-        mimeType: 'image/png',
-        byteSize: harvest.screenshot.byteLength,
+        mimeType: rendered ? 'image/png' : 'application/json',
+        byteSize: payload.byteLength,
         width: harvest.screenshotWidth,
         height: harvest.screenshotHeight,
         sourceFidelity: 'structured',
@@ -481,7 +610,7 @@ async function storeHarvestedPage(
         assetType: 'webpage',
         locale: harvest.lang ?? null,
         copyFields: { body: harvest.bodyText.slice(0, 8000), title: harvest.title ?? '' },
-        tags: ['discovery', viewport],
+        tags: rendered ? ['discovery', viewport] : ['discovery', viewport, 'static'],
       })
       .returning({ id: assets.id });
 

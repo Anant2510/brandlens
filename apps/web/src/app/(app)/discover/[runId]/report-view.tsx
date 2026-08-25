@@ -75,6 +75,17 @@ export function DiscoveryReportView({ runId }: { runId: string }) {
 
         {report ? (
           <>
+            {report.coverage.harvestMode === 'static' ? (
+              <div
+                role="note"
+                className="rounded-lg border border-advisory-soft bg-advisory-soft/40 p-3 text-[13px] text-advisory-fg"
+              >
+                <strong className="font-semibold">Read from served HTML.</strong> This site refused the rendered
+                browser, so the ontology was read from the markup and CSS it serves to a plain request. Colours and
+                type are declared, not measured from a render, and there are no screenshots — treat every token as
+                lower-confidence until reviewed.
+              </div>
+            ) : null}
             <SummaryRow report={report} />
             <IdentitySection report={report} />
             <VoiceSection report={report} />

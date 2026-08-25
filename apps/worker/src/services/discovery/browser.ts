@@ -40,6 +40,109 @@ export function isHttp2ProtocolError(error: unknown): boolean {
   return /ERR_HTTP2_PROTOCOL_ERROR|ERR_SPDY_PROTOCOL_ERROR/.test(message);
 }
 
+/* --------------------------------------------------------------------------
+ * Telling apart the three ways harvesting fails.
+ *
+ * A page.goto that throws has told us almost nothing on its own: a reset
+ * connection, a protocol error and a 30-second timeout are three different
+ * words for "the browser did not get a page", and the report was showing the
+ * raw string, which is how "this site blocks bots" reached a person as
+ * `Timeout 30000ms exceeded`.
+ *
+ * The signal that separates them is cheap: try the same origin with a plain
+ * HTTP client. A site that a bare fetch can reach but a real browser cannot is
+ * not down and is not slow -- it is refusing the automated browser, which is
+ * what Akamai, Cloudflare and the rest do by resetting or stalling the
+ * connection rather than answering 403. A site a bare fetch also cannot reach
+ * is genuinely unreachable. Same throw, opposite meaning, and the difference
+ * is the whole thing a person needs to know.
+ * ------------------------------------------------------------------------ */
+export type HarvestFailureKind = 'bot-refused' | 'unreachable' | 'timeout' | 'unknown';
+
+export interface HarvestDiagnosis {
+  kind: HarvestFailureKind;
+  /** The underlying Chromium error, kept for logs. */
+  detail: string;
+  /** One sentence a person can act on, for the report. */
+  hint: string;
+  originReached: boolean;
+}
+
+const NAV_NETWORK_ERROR =
+  /ERR_(CONNECTION_(RESET|CLOSED|ABORTED|FAILED|REFUSED)|HTTP2_PROTOCOL_ERROR|SPDY_PROTOCOL_ERROR|EMPTY_RESPONSE|SSL|TIMED_OUT)/;
+const NAV_TIMEOUT = /Timeout .*exceeded|ERR_TIMED_OUT/;
+const NAV_DNS = /ERR_NAME_NOT_RESOLVED/;
+
+export type OriginProbe = { reached: boolean; status?: number; error?: string };
+
+/**
+ * One plain-HTTP request to the origin, no browser involved. Any HTTP response
+ * -- even a 403 -- means "reached": the server is up and talking to a
+ * non-browser client, which is exactly the state that distinguishes a bot wall
+ * from an outage.
+ */
+export async function probeOrigin(url: string, timeoutMs = 10_000): Promise<OriginProbe> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(new URL(url).origin, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        // The honest discovery UA, and a browser-shaped Accept so a server
+        // that varies on it returns HTML rather than an API error.
+        'user-agent': FULL_USER_AGENT,
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    });
+    await res.body?.cancel().catch(() => undefined);
+    return { reached: true, status: res.status };
+  } catch (err) {
+    return { reached: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Classifies a navigation failure, using a plain-HTTP probe to disambiguate.
+ * The probe is injectable so the branching can be tested without a network.
+ */
+export async function diagnoseHarvestFailure(
+  url: string,
+  error: unknown,
+  probe: (url: string) => Promise<OriginProbe> = probeOrigin,
+): Promise<HarvestDiagnosis> {
+  const detail = error instanceof Error ? error.message : String(error);
+
+  if (NAV_DNS.test(detail)) {
+    return { kind: 'unreachable', detail, originReached: false, hint: 'The domain did not resolve — check the URL is spelt correctly and is public.' };
+  }
+
+  const networkish = NAV_NETWORK_ERROR.test(detail) || NAV_TIMEOUT.test(detail);
+  if (!networkish) {
+    return { kind: 'unknown', detail, originReached: false, hint: 'The page could not be rendered.' };
+  }
+
+  const result = await probe(url);
+  if (result.reached) {
+    return {
+      kind: 'bot-refused',
+      detail,
+      originReached: true,
+      hint:
+        'The site answered a plain request but refused the automated browser. It uses bot mitigation ' +
+        '(Akamai, Cloudflare and similar) that blocks headless crawlers, so discovery cannot harvest it. ' +
+        'Upload the brand book or brand assets directly, or point discovery at a press or brand-guidelines page.',
+    };
+  }
+  if (NAV_TIMEOUT.test(detail)) {
+    return { kind: 'timeout', detail, originReached: false, hint: 'The site did not respond in time and a plain request could not reach it either — it may be down or blocking this network.' };
+  }
+  return { kind: 'unreachable', detail, originReached: false, hint: `The site could not be reached from this host (${result.error ?? 'no response'}).` };
+}
+
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, isMobile: false, deviceScaleFactor: 1 },
   mobile: { width: 390, height: 844, isMobile: true, deviceScaleFactor: 2 },

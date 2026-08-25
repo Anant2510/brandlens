@@ -98,6 +98,22 @@ export const WorkerEnvSchema = z.object({
 
   /** How long a `running` check run may sit before the reconciler requeues it. */
   RECONCILE_STUCK_MINUTES: num(30),
+
+  /**
+   * Brand-data enrichment. Optional, off when unset — discovery works without
+   * it, this only adds a provider's brand record to every run (and is the only
+   * source that covers a JS-only SPA, since it never touches the site).
+   *
+   * BRANDFETCH_API_KEY unlocks the full record (colours, fonts, logos). Its
+   * free tier is 100 brand fetches / month; results are cached by domain so a
+   * re-run does not spend one. LOGODEV_TOKEN is a logo-only fallback on a
+   * generous free tier. No key is ever hard-coded; with neither set,
+   * enrichment is simply skipped.
+   */
+  BRANDFETCH_API_KEY: str(''),
+  LOGODEV_TOKEN: str(''),
+  /** TTL for the per-domain enrichment cache. A brand's identity is stable. */
+  ENRICHMENT_CACHE_TTL_HOURS: num(168),
 });
 
 export type WorkerEnv = z.infer<typeof WorkerEnvSchema>;
