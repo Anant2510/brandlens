@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isHttp2ProtocolError, isLikelyLogo } from './browser';
+import { diagnoseHarvestFailure, isHttp2ProtocolError, isLikelyLogo } from './browser';
 
 describe('isHttp2ProtocolError', () => {
   /*
@@ -73,5 +73,64 @@ describe('isLikelyLogo', () => {
 
   it('rejects an image outside the header with nothing to recommend it', () => {
     expect(isLikelyLogo(image({ region: 'main' }))).toBe(false);
+  });
+});
+
+describe('diagnoseHarvestFailure', () => {
+  const reached = async () => ({ reached: true, status: 200 });
+  const reached403 = async () => ({ reached: true, status: 403 });
+  const unreached = async () => ({ reached: false, error: 'fetch failed' });
+
+  it('calls it bot mitigation when a browser is reset but a plain request gets through', async () => {
+    /*
+     * The academy.com case exactly: three different Chromium errors across
+     * three attempts — a reset, a protocol error, a timeout — while curl and a
+     * bare fetch both get 200. A site that answers everything except a real
+     * browser is not down and is not slow; it is refusing the crawler.
+     */
+    for (const detail of [
+      'page.goto: net::ERR_CONNECTION_RESET at https://www.academy.com/',
+      'page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.academy.com/',
+      'page.goto: Timeout 30000ms exceeded.',
+    ]) {
+      const d = await diagnoseHarvestFailure('https://www.academy.com/', new Error(detail), reached);
+      expect({ detail, kind: d.kind }).toMatchObject({ kind: 'bot-refused' });
+      expect(d.hint).toMatch(/bot mitigation|refused the automated browser/i);
+    }
+  });
+
+  it('treats a 403 to the plain probe as reached — the server is up and choosing to refuse', async () => {
+    const d = await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), reached403);
+    expect(d.kind).toBe('bot-refused');
+    expect(d.originReached).toBe(true);
+  });
+
+  it('calls it unreachable when neither the browser nor a plain request can connect', async () => {
+    const d = await diagnoseHarvestFailure('https://nope/', new Error('net::ERR_CONNECTION_RESET'), unreached);
+    expect(d.kind).toBe('unreachable');
+    expect(d.hint).toContain('could not be reached');
+  });
+
+  it('separates a timeout that no plain request can reach from a bot wall', async () => {
+    const d = await diagnoseHarvestFailure('https://slow/', new Error('Timeout 30000ms exceeded.'), unreached);
+    expect(d.kind).toBe('timeout');
+  });
+
+  it('does not probe, and does not cry bot, on a DNS failure', async () => {
+    let probed = false;
+    const probe = async () => {
+      probed = true;
+      return { reached: true };
+    };
+    const d = await diagnoseHarvestFailure('https://typo/', new Error('net::ERR_NAME_NOT_RESOLVED'), probe);
+    expect(d.kind).toBe('unreachable');
+    expect(probed).toBe(false);
+  });
+
+  it('stays honest about an error it does not recognise rather than guessing bot mitigation', async () => {
+    // A non-network throw must never be labelled bot-refused, even if the
+    // origin happens to be reachable — that would cry wolf on every render bug.
+    const d = await diagnoseHarvestFailure('https://x/', new Error('page.evaluate: something threw'), reached);
+    expect(d.kind).toBe('unknown');
   });
 });

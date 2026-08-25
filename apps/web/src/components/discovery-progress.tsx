@@ -37,6 +37,12 @@ export function DiscoveryProgress({ runId, onDismiss }: { runId: string; onDismi
   const isDone = run.status === 'completed' || run.status === 'partial';
   const isDead = run.status === 'failed' || run.status === 'cancelled';
 
+  // The worker prepends a `diagnosis:<kind>` marker to stageErrors when a run
+  // harvested nothing. It steers the banner's tone and is not itself a page
+  // failure, so it is read here and kept out of the list below.
+  const diagnosisKind = run.stageErrors.find((e) => e.message.startsWith('diagnosis:'))?.message.slice('diagnosis:'.length);
+  const harvestErrors = run.stageErrors.filter((e) => !e.message.startsWith('diagnosis:'));
+
   return (
     <Card>
       <CardContent className="space-y-3 p-4">
@@ -117,18 +123,28 @@ export function DiscoveryProgress({ runId, onDismiss }: { runId: string; onDismi
         </ol>
 
         {run.error ? (
-          <p role="alert" className="rounded-md bg-blocker-soft p-2 text-[11px] text-blocker-fg">
+          // A site that refuses crawlers is an expected outcome, not a crash,
+          // so it reads as advisory rather than blocker-red. The worker tags
+          // the run with a `diagnosis:<kind>` marker for exactly this.
+          <p
+            role="alert"
+            className={
+              diagnosisKind === 'bot-refused'
+                ? 'rounded-md bg-advisory-soft p-2 text-[11px] text-advisory-fg'
+                : 'rounded-md bg-blocker-soft p-2 text-[11px] text-blocker-fg'
+            }
+          >
             {run.error}
           </p>
         ) : null}
 
-        {run.stageErrors.length > 0 ? (
+        {harvestErrors.length > 0 ? (
           <details className="rounded-md bg-surface-2 p-2">
             <summary className="cursor-pointer text-[11px] text-fg-muted">
-              {run.stageErrors.length} page{run.stageErrors.length === 1 ? '' : 's'} could not be harvested
+              {harvestErrors.length} page{harvestErrors.length === 1 ? '' : 's'} could not be harvested
             </summary>
             <ul className="mt-1.5 space-y-1">
-              {run.stageErrors.slice(0, 8).map((e, i) => (
+              {harvestErrors.slice(0, 8).map((e, i) => (
                 <li key={i} className="text-[11px] text-fg-subtle">
                   <span className="num">{e.url ? shortPath(e.url) : e.stage}</span> — {e.message}
                 </li>

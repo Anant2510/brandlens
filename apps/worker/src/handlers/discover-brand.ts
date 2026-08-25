@@ -28,7 +28,7 @@ import { env } from '../config';
 import { getContext } from '../context';
 import { logger } from '../logger';
 import { emitEvent } from '../services/outbox';
-import { DiscoveryBrowser, type PageHarvest, type ViewportName } from '../services/discovery/browser';
+import { DiscoveryBrowser, diagnoseHarvestFailure, type PageHarvest, type ViewportName } from '../services/discovery/browser';
 import { CrawlFrontier } from '../services/discovery/frontier';
 import {
   extractPalette,
@@ -180,9 +180,19 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
     await browser.close();
 
     if (harvests.length === 0) {
+      // Turn the raw navigation error into something a person can act on. A
+      // bot wall, an outage and a slow site all throw here, and only a plain
+      // probe of the origin tells them apart — so this is where "Timeout
+      // 30000ms exceeded" becomes "this site refuses automated browsers".
+      const firstError = stageErrors.find((e) => e.stage === 'harvesting')?.message ?? 'the site returned no renderable pages';
+      const diagnosis = await diagnoseHarvestFailure(run.originUrl, new Error(firstError));
+      log.warn({ diagnosis, originUrl: run.originUrl }, 'harvest produced nothing');
+      // Record the machine-readable kind so a future UI can badge it; the
+      // stageErrors array is jsonb and takes the extra entry without a migration.
+      stageErrors.unshift({ stage: 'harvesting', message: `diagnosis:${diagnosis.kind}` });
       throw new Error(
-        `Nothing could be harvested from ${run.originUrl}. ` +
-          (stageErrors[0]?.message ?? 'The site returned no renderable pages.'),
+        `Nothing could be harvested from ${run.originUrl}. ${diagnosis.hint}` +
+          (diagnosis.kind === 'bot-refused' ? '' : ` (${diagnosis.detail})`),
       );
     }
 
