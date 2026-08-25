@@ -165,6 +165,50 @@ export async function probeOrigin(url: string, timeoutMs = 10_000): Promise<Orig
 }
 
 /**
+ * Is what we harvested a sample of the site, or just what slipped past?
+ *
+ * A crawl that returned more walls than pages did not find a small site; it
+ * found a defended one, and the few pages that got through are a biased
+ * remnant — often a legal or sitemap page that the WAF does not guard. Deriving
+ * a palette and a type scale from those is not thin data, it is confident
+ * wrong data, which is the failure mode this whole system exists to avoid. So
+ * a majority-wall harvest is treated as a shortfall and topped up from the
+ * plain-HTTP channel, exactly like an empty one.
+ *
+ * Kept out of the handler and named so the policy can be argued with and
+ * tested; it was an inline comparison, and an inline comparison is where a
+ * silent behaviour change hides.
+ */
+export function corpusIsMostlyWalls(rendered: number, blocked: number): boolean {
+  return blocked > rendered;
+}
+
+/**
+ * The diagnosis for a site that answered — with a wall.
+ *
+ * `diagnoseHarvestFailure` below infers bot mitigation indirectly, from a
+ * browser that could not connect while a plain request could. A served
+ * challenge page needs no inference at all: the browser DID connect, the site
+ * DID answer, and what it answered with was a CAPTCHA. That is the strongest
+ * evidence of refusal available, and it must not be routed through a
+ * classifier that only recognises connection errors — which would call it
+ * `unknown` and skip the fallback at the exact moment the fallback is the
+ * whole point.
+ */
+export function challengeRefusalDiagnosis(count: number): HarvestDiagnosis {
+  return {
+    kind: 'bot-refused',
+    detail: `${count} navigation(s) returned a bot-challenge interstitial instead of content`,
+    originReached: true,
+    hint:
+      'The site served a CAPTCHA or "access denied" challenge page to the automated browser instead of ' +
+      'its content. It is up and reachable — it is refusing automation (Akamai, Cloudflare and similar). ' +
+      'Discovery will read what the site serves to a plain request instead; you can also upload the brand ' +
+      'book or point discovery at a press or brand-guidelines page.',
+  };
+}
+
+/**
  * Classifies a navigation failure, using a plain-HTTP probe to disambiguate.
  * The probe is injectable so the branching can be tested without a network.
  */
