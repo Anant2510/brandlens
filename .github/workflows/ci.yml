@@ -402,6 +402,52 @@ jobs:
           }
           if ($failed) { exit 1 }
 
+      # Parsing is not running. Every check above proves the scripts LOAD; none
+      # proved they WORK, and the gap cost a deploy.
+      #
+      # `Get-JsonValue` called $dict.Contains($key). JavaScriptSerializer --
+      # the parser used on the VM specifically because it tolerates pm2's
+      # case-clashing environment keys -- returns Dictionary[string,object],
+      # which implements IDictionary.Contains(object) EXPLICITLY. An explicit
+      # implementation is invisible on the concrete type, so PowerShell found
+      # no bindable one-argument overload and threw. The pm2 and /health/deep
+      # checks both failed on a VM where every service was healthy, and
+      # deploy.ps1 rolled back a good release because of it.
+      #
+      # It could not have been caught anywhere but here: on pwsh 7 the parser
+      # falls through to -AsHashtable, and a Hashtable does expose a public
+      # Contains. So this step runs under Windows PowerShell 5.1, against the
+      # real serializer, on the shapes the two callers actually receive.
+      - name: Health-check JSON helpers work under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          . ./infra/windows/_common.ps1
+          $fail = 0
+          function Check($label, $actual, $expected) {
+            if ("$actual" -ne "$expected") {
+              Write-Host "::error::$label -- expected '$expected', got '$actual'"
+              $script:fail = 1
+            } else { Write-Host "ok  $label" }
+          }
+
+          # The pm2 jlist shape, including the case-clashing keys that are the
+          # entire reason ConvertFrom-JsonSafe exists.
+          $pm2 = ConvertFrom-JsonSafe '[{"name":"brandlens-api","pm2_env":{"status":"online","restart_time":0,"username":"a","USERNAME":"A"}}]'
+          Check 'pm2 parses at all' ($null -ne $pm2) 'True'
+          Check 'pm2 name'    (Get-JsonValue $pm2[0] 'name') 'brandlens-api'
+          Check 'pm2 status'  (Get-JsonValue $pm2[0] 'pm2_env' 'status') 'online'
+          Check 'pm2 case-sensitive keys' (Get-JsonValue $pm2[0] 'pm2_env' 'USERNAME') 'A'
+          Check 'pm2 absent key is null'  ($null -eq (Get-JsonValue $pm2[0] 'nope')) 'True'
+
+          # The /health/deep shape, including the nested path the summary reads.
+          $deep = ConvertFrom-JsonSafe '{"status":"ok","components":{"vector":{"ok":true,"latencyMs":3,"detail":{"driver":"pgvector"}}}}'
+          Check 'deep status' (Get-JsonValue $deep 'status') 'ok'
+          Check 'deep nested driver' (Get-JsonValue $deep 'components' 'vector' 'detail' 'driver') 'pgvector'
+          Check 'deep component ok'  ([bool](Get-JsonValue $deep 'components' 'vector' 'ok')) 'True'
+          Check 'deep Keys enumerable' (@((Get-JsonValue $deep 'components').Keys).Count) '1'
+
+          exit $fail
+
       - name: PM2 ecosystem config is valid
         run: node -e "const c=require('./infra/windows/ecosystem.config.cjs'); if(c.apps.length!==4) throw new Error('expected 4 apps, got '+c.apps.length); console.log('apps:', c.apps.map(a=>a.name).join(', '))"
 

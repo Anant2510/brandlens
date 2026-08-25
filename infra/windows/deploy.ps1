@@ -105,14 +105,22 @@ function Invoke-CodeRollback {
         [Parameter(Mandatory)][string]$Pnpm
     )
     try {
-        & $Git -C $Root reset --hard $Sha 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "git reset --hard $Sha failed" }
-
-        & $Pnpm install --frozen-lockfile 2>&1 | Out-Null
-        & $Pnpm build 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'rebuild of the previous version failed' }
-
-        & pm2 reload all --update-env 2>&1 | Out-Null
+        # Invoke-Checked, not a hand-rolled `2>&1 | Out-Null`. With
+        # $ErrorActionPreference = 'Stop' in force, `2>&1` promotes ANYTHING a
+        # native command writes to stderr into a terminating NativeCommandError
+        # regardless of its exit code -- and `pnpm install` reliably emits a
+        # Node DeprecationWarning there. So the rollback declared itself failed,
+        # printed "this VM is now in an indeterminate state", and skipped the
+        # rebuild and the reload, on a machine where nothing was wrong.
+        #
+        # That is the exact trap Invoke-Checked was written to close. This
+        # function predated it and hand-rolled the calls instead, which is how
+        # the fix missed the one code path where a false alarm is most alarming.
+        Invoke-Checked -FilePath $Git -ArgumentList @('-C', $Root, 'reset', '--hard', $Sha) -Context 'git reset --hard'
+        Invoke-Checked -FilePath $Pnpm -ArgumentList @('install', '--frozen-lockfile') `
+            -WorkingDirectory $Root -Context 'pnpm install (rollback)'
+        Invoke-Checked -FilePath $Pnpm -ArgumentList @('build') -WorkingDirectory $Root -Context 'pnpm build (rollback)'
+        Invoke-Checked -FilePath 'pm2' -ArgumentList @('reload', 'all', '--update-env') -Context 'pm2 reload (rollback)'
         Write-Ok ('Rolled back to {0} and reloaded' -f $Sha.Substring(0, 12))
     } catch {
         Write-Fail ('ROLLBACK FAILED: {0}' -f $_.Exception.Message)
