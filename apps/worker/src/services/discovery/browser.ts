@@ -125,6 +125,23 @@ export interface HarvestDiagnosis {
   /** One sentence a person can act on, for the report. */
   hint: string;
   originReached: boolean;
+  /**
+   * Whether reading the site over plain HTTP is worth attempting.
+   *
+   * This is deliberately NOT `kind === 'bot-refused'`, which is what it used
+   * to be. That made a single 10-second probe the gatekeeper for the fallback:
+   * northerntrust.com reset and stalled the browser exactly as academy.com
+   * did, the probe was dropped too, the run was classified `timeout`, and the
+   * plain channel — the entire remedy — was never tried. A bank behind Akamai
+   * refusing one bare GET is not evidence that a polite identified crawl of
+   * the served HTML would fail; it is barely evidence about anything.
+   *
+   * The static harvest IS the better test of "can this be read over plain
+   * HTTP", because it is the thing we actually want to do. So we run it and
+   * let the result speak, and the only answer that stops us is the one where
+   * there is no host to talk to at all.
+   */
+  plainHttpWorthTrying: boolean;
 }
 
 const NAV_NETWORK_ERROR =
@@ -200,6 +217,7 @@ export function challengeRefusalDiagnosis(count: number): HarvestDiagnosis {
     kind: 'bot-refused',
     detail: `${count} navigation(s) returned a bot-challenge interstitial instead of content`,
     originReached: true,
+    plainHttpWorthTrying: true,
     hint:
       'The site served a CAPTCHA or "access denied" challenge page to the automated browser instead of ' +
       'its content. It is up and reachable — it is refusing automation (Akamai, Cloudflare and similar). ' +
@@ -220,12 +238,27 @@ export async function diagnoseHarvestFailure(
   const detail = error instanceof Error ? error.message : String(error);
 
   if (NAV_DNS.test(detail)) {
-    return { kind: 'unreachable', detail, originReached: false, hint: 'The domain did not resolve — check the URL is spelt correctly and is public.' };
+    // The one genuine no-op: there is no host to send a plain request to.
+    return {
+      kind: 'unreachable',
+      detail,
+      originReached: false,
+      plainHttpWorthTrying: false,
+      hint: 'The domain did not resolve — check the URL is spelt correctly and is public.',
+    };
   }
 
   const networkish = NAV_NETWORK_ERROR.test(detail) || NAV_TIMEOUT.test(detail);
   if (!networkish) {
-    return { kind: 'unknown', detail, originReached: false, hint: 'The page could not be rendered.' };
+    // A non-network throw means the browser REACHED the site and something
+    // else broke. Plain HTTP is very likely to work; try it.
+    return {
+      kind: 'unknown',
+      detail,
+      originReached: false,
+      plainHttpWorthTrying: true,
+      hint: 'The page could not be rendered.',
+    };
   }
 
   const result = await probe(url);
@@ -234,6 +267,7 @@ export async function diagnoseHarvestFailure(
       kind: 'bot-refused',
       detail,
       originReached: true,
+      plainHttpWorthTrying: true,
       hint:
         'The site answered a plain request but refused the automated browser. It uses bot mitigation ' +
         '(Akamai, Cloudflare and similar) that blocks headless crawlers, so discovery cannot harvest it. ' +
@@ -241,9 +275,23 @@ export async function diagnoseHarvestFailure(
     };
   }
   if (NAV_TIMEOUT.test(detail)) {
-    return { kind: 'timeout', detail, originReached: false, hint: 'The site did not respond in time and a plain request could not reach it either — it may be down or blocking this network.' };
+    return {
+      kind: 'timeout',
+      detail,
+      originReached: false,
+      // The probe failed, but the probe is one bare GET. A site that stalls it
+      // may still serve a polite identified crawl, so this does not veto.
+      plainHttpWorthTrying: true,
+      hint: 'The site did not respond in time and a plain request could not reach it either — it may be down or blocking this network.',
+    };
   }
-  return { kind: 'unreachable', detail, originReached: false, hint: `The site could not be reached from this host (${result.error ?? 'no response'}).` };
+  return {
+    kind: 'unreachable',
+    detail,
+    originReached: false,
+    plainHttpWorthTrying: true,
+    hint: `The site could not be reached from this host (${result.error ?? 'no response'}).`,
+  };
 }
 
 export const VIEWPORTS = {
