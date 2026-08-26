@@ -32,7 +32,15 @@
 
 import { parse } from 'node-html-parser';
 import { logger } from '../../logger';
-import { FULL_USER_AGENT, type ImageCandidate, type PageHarvest, type PaintedColor, type TextRun, isLikelyLogo } from './browser';
+import {
+  FULL_USER_AGENT,
+  type ImageCandidate,
+  type PageHarvest,
+  type PaintedColor,
+  type TextRun,
+  classifyChallengePage,
+  isLikelyLogo,
+} from './browser';
 
 /** node-html-parser's root node type, named without the DOM global's word. */
 type Root = ReturnType<typeof parse>;
@@ -429,19 +437,36 @@ export interface StaticHarvestOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+export interface StaticHarvestResult {
+  pages: PageHarvest[];
+  /** Fetches that answered with a bot-challenge interstitial, not content. */
+  blocked: number;
+}
+
 /**
  * A small, polite, plain-HTTP crawl starting at the seed. Follows same-site
  * links breadth-first up to `maxPages`, using only the channel the site serves
- * to non-browser clients. Returns whatever it could read; an empty array means
- * even the plain channel is closed, and the caller falls back to the honest
- * "upload the brand book" message.
+ * to non-browser clients.
+ *
+ * Challenge pages are dropped here for the same reason they are dropped in the
+ * rendered harvest, and it matters MORE here: this path exists because the site
+ * is already known to be defended, so it is the path most likely to be handed a
+ * wall. A wall served over plain HTTP is still a wall — 200, a real DOM, and
+ * nothing of the brand in it. Its links are not followed either; they lead back
+ * into the challenge, which is how one blocked fetch turns into twenty
+ * identical "Access to this page has been denied" rows in a report.
+ *
+ * `blocked` is returned rather than folded into the page count so the caller
+ * can tell "this site has little content" from "this site walled us on the
+ * plain channel too", which are different things to tell a person.
  */
-export async function staticHarvestSite(seedUrl: string, options: StaticHarvestOptions): Promise<PageHarvest[]> {
+export async function staticHarvestSite(seedUrl: string, options: StaticHarvestOptions): Promise<StaticHarvestResult> {
   const sleep = options.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const origin = safeOrigin(seedUrl);
   const queue: string[] = [seedUrl];
   const visited = new Set<string>();
   const harvests: PageHarvest[] = [];
+  let blocked = 0;
 
   while (queue.length > 0 && harvests.length < options.maxPages) {
     const url = queue.shift()!;
@@ -452,6 +477,14 @@ export async function staticHarvestSite(seedUrl: string, options: StaticHarvestO
 
     const parsed = await staticHarvestPage(url);
     if (!parsed) continue;
+
+    const challenge = classifyChallengePage(parsed.harvest);
+    if (challenge.isChallenge) {
+      blocked += 1;
+      log.info({ url, reason: challenge.reason }, 'static harvest was served a challenge page');
+      continue;
+    }
+
     harvests.push(parsed.harvest);
 
     for (const link of parsed.harvest.links) {
@@ -460,6 +493,6 @@ export async function staticHarvestSite(seedUrl: string, options: StaticHarvestO
     if (options.crawlDelayMs && options.crawlDelayMs > 0) await sleep(options.crawlDelayMs);
   }
 
-  log.info({ seedUrl, pages: harvests.length }, 'static harvest complete');
-  return harvests;
+  log.info({ seedUrl, pages: harvests.length, blocked }, 'static harvest complete');
+  return { pages: harvests, blocked };
 }

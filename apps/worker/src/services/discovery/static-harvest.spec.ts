@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { classifyChallengePage } from './browser';
 import {
   colorsFromCss,
   fontsFromCss,
@@ -160,5 +161,59 @@ describe('parseStaticPage', () => {
     expect(h.screenshot.byteLength).toBe(0);
     expect(h.screenshotWidth).toBe(0);
     expect(h.bodyText).toContain('Find Your Sport');
+  });
+});
+
+/*
+ * The plain channel gets walled too.
+ *
+ * The rendered harvest learned to discard challenge pages; the static fallback
+ * did not, and it is the path MORE likely to be handed one, because it only
+ * runs on sites already known to be defended. The result was a report listing
+ * twenty "Access to this page has been denied" cards as harvested pages, with
+ * a palette and a readability grade measured off the CAPTCHA.
+ *
+ * staticHarvestSite needs the network, so what is pinned here is the decision
+ * it delegates: that a challenge page parsed from served HTML is recognised as
+ * one. Same classifier as the rendered path, fed the real academy.com markup.
+ */
+describe('a challenge page served over plain HTTP', () => {
+  const CHALLENGE = `<!doctype html>
+<html><head><title>Access to this page has been denied.</title></head>
+<body>
+  <div id="content">
+    <h1>Access to this page has been denied.</h1>
+    <p>Access to this page has been denied because we believe you are using automation tools to browse the website.</p>
+    <p>Reference ID: 18.4f6c1a3b.1756192800.knfjvdun</p>
+  </div>
+</body></html>`;
+
+  it('is recognised from the HTML alone, exactly as the rendered path recognises it', () => {
+    const parsed = parseStaticPage(CHALLENGE, 'https://www.academy.com/captcha/knfjvdun/challenge.html', '', 200);
+    const verdict = classifyChallengePage(parsed.harvest);
+    expect(verdict.isChallenge).toBe(true);
+  });
+
+  it('is caught by the URL even when the markup is bland', () => {
+    // Akamai varies the body; the /captcha/ path is the stable tell.
+    const parsed = parseStaticPage(
+      '<!doctype html><html><head><title>Loading</title></head><body><p>Please wait.</p></body></html>',
+      'https://www.academy.com/captcha/knfjvdun/challenge.html?provider=akamai&r=1',
+      '',
+      200,
+    );
+    expect(classifyChallengePage(parsed.harvest).isChallenge).toBe(true);
+  });
+
+  it('leaves a real academy.com category page alone', () => {
+    // The guard against over-matching: a thin category page is still content.
+    const parsed = parseStaticPage(
+      '<!doctype html><html><head><title>Men&rsquo;s Sporting Goods | Price Match Guaranteed</title></head>' +
+        '<body><h1>Men&rsquo;s</h1><p>Shop shoes, apparel and gear for every sport.</p></body></html>',
+      'https://www.academy.com/c/mens',
+      '',
+      200,
+    );
+    expect(classifyChallengePage(parsed.harvest).isChallenge).toBe(false);
   });
 });
