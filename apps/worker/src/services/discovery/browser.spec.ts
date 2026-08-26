@@ -261,3 +261,52 @@ describe('challengeRefusalDiagnosis', () => {
     expect(challengeRefusalDiagnosis(3).kind).toBe('bot-refused');
   });
 });
+
+describe('plainHttpWorthTrying', () => {
+  /*
+   * northerntrust.com is why this field exists.
+   *
+   * It threw the same reset/timeout mix academy.com threw. But the plain probe
+   * — one bare 10-second GET — was dropped as well, so the run was classified
+   * `timeout`, and the static fallback, gated on kind === 'bot-refused', never
+   * ran. The remedy was skipped on the strength of the weakest test available,
+   * and the report told the user the site "may be down" while the site was
+   * serving its homepage to any browser.
+   *
+   * The rule now: a bank behind Akamai refusing one bare GET says almost
+   * nothing about whether a polite identified crawl of its served HTML would
+   * work. Run the crawl and let it answer. The only thing worth skipping for
+   * is a domain with no host behind it.
+   */
+  const reached = async () => ({ reached: true, status: 200 });
+  const unreached = async () => ({ reached: false, error: 'fetch failed' });
+
+  it('is true for a timeout whose probe also failed — the case that was silently skipped', async () => {
+    const d = await diagnoseHarvestFailure('https://www.northerntrust.com/', new Error('page.goto: Timeout 30000ms exceeded.'), unreached);
+    expect(d.kind).toBe('timeout');
+    expect(d.plainHttpWorthTrying).toBe(true);
+  });
+
+  it('is true for a connection reset the probe could not get past either', async () => {
+    const d = await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), unreached);
+    expect(d.kind).toBe('unreachable');
+    expect(d.plainHttpWorthTrying).toBe(true);
+  });
+
+  it('is true for a confirmed bot wall, and for a served challenge page', async () => {
+    const d = await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), reached);
+    expect(d.plainHttpWorthTrying).toBe(true);
+    expect(challengeRefusalDiagnosis(4).plainHttpWorthTrying).toBe(true);
+  });
+
+  it('is true for a render bug, because the browser plainly reached the site', async () => {
+    const d = await diagnoseHarvestFailure('https://x/', new Error('page.evaluate: something threw'), reached);
+    expect(d.kind).toBe('unknown');
+    expect(d.plainHttpWorthTrying).toBe(true);
+  });
+
+  it('is FALSE only when the domain does not resolve — nothing to send a request to', async () => {
+    const d = await diagnoseHarvestFailure('https://typo/', new Error('net::ERR_NAME_NOT_RESOLVED'), reached);
+    expect(d.plainHttpWorthTrying).toBe(false);
+  });
+});

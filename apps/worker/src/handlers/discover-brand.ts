@@ -261,11 +261,18 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
         harvests.length === 0 ? 'rendered harvest produced nothing' : 'rendered harvest was mostly bot challenges',
       );
 
-      if (diagnosis.kind === 'bot-refused' && options.staticFallback) {
+      // Gated on the diagnosis's own judgement, not on kind === 'bot-refused'.
+      // That older gate made a single 10-second probe the veto: northerntrust
+      // stalled the browser AND the probe, was filed as `timeout`, and never
+      // got the plain-HTTP attempt that is the entire remedy — while the
+      // failures listed on the report were the same reset/timeout mix that
+      // academy.com produced. The attempt is cheap and is better evidence than
+      // the probe; only a domain that does not resolve is worth skipping.
+      if (diagnosis.plainHttpWorthTrying && options.staticFallback) {
         // The origin answered a plain request, so read the ontology from the
         // HTML it serves. This is the channel the site keeps open, taken
         // honestly — see static-harvest.ts on why that is not evasion.
-        await setStage('harvesting', 0.5, { note: 'browser refused; reading served HTML' });
+        await setStage('harvesting', 0.5, { note: 'rendered harvest got nothing; reading served HTML' });
         const staticResult = await staticHarvestSite(run.seedUrl, {
           maxPages: options.maxPages,
           crawlDelayMs: politeDelay,
@@ -291,7 +298,7 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
             stage: 'harvesting',
             level: 'note',
             message:
-              `This site refused the rendered browser, so ${added} page(s) were read from the ` +
+              `The rendered browser could not read this site, so ${added} page(s) were read from the ` +
               'HTML it serves to a plain request. Colours and type are read from the CSS, not measured from a ' +
               'render, so treat them as lower-confidence until reviewed.',
           });
