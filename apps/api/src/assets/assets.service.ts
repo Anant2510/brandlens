@@ -98,7 +98,7 @@ export class AssetsService {
   async get(orgId: string, assetId: string, withPreview = true): Promise<AssetDto> {
     const row = await this.findRow(orgId, assetId);
     const dto = toDto(row);
-    if (withPreview) dto.previewUrl = await this.previewUrl(orgId, row).catch(() => null);
+    if (withPreview) dto.previewUrl = await this.thumbnailUrl(orgId, row).catch(() => null);
     return dto;
   }
 
@@ -329,6 +329,35 @@ export class AssetsService {
   }
 
   /**
+   * The URL for an `<img>` — null when there is nothing an `<img>` can show.
+   *
+   * Distinct from `previewUrl`, which backs the open/download endpoint and must
+   * keep signing PDFs, Word files and anything else a person asked to fetch.
+   * This one feeds `AssetDto.previewUrl`, and every consumer of that field puts
+   * it straight into an image tag.
+   *
+   * The distinction was missing, and a discovery page harvested over plain HTTP
+   * carries no screenshot: it is stored as its structured source, key
+   * `…/<hash>.json`. That key got signed and handed over as a preview, so the
+   * report rendered a grid of broken-image icons pointing at JSON. The user's
+   * question was "why can't I see the images", and the honest answer — there
+   * are no images, this site was read without a browser — was information the
+   * API had and threw away.
+   */
+  async thumbnailUrl(orgId: string, asset: AssetRow): Promise<string | null> {
+    const thumb = await this.repo.runAs(orgId, undefined, (tx) =>
+      tx
+        .select({ storageKey: assetDerivatives.storageKey })
+        .from(assetDerivatives)
+        .where(and(eq(assetDerivatives.assetId, asset.id), eq(assetDerivatives.kind, 'thumbnail')))
+        .limit(1),
+    );
+    const key = thumb[0]?.storageKey ?? asset.storageKey;
+    if (!isRenderableImageKey(key)) return null;
+    return this.signPreviewKey(key, 'inline');
+  }
+
+  /**
    * The single place a storage key becomes a preview URL.
    *
    * Both the list and the detail path need this rule, and they need to agree:
@@ -378,6 +407,10 @@ export class AssetsService {
     await Promise.all(
       rows.map(async (row, i) => {
         const key = thumbByAsset.get(row.id) ?? row.storageKey;
+        if (!isRenderableImageKey(key)) {
+          dtos[i].previewUrl = null;
+          return;
+        }
         dtos[i].previewUrl = await this.signPreviewKey(key).catch((err) => {
           this.logger.warn(`Preview URL failed for asset ${row.id}: ${String(err)}`);
           return null;
@@ -467,6 +500,25 @@ export class AssetsService {
  * `external` - already an absolute URL (remote driver); hand it through.
  * `sign`     - a local storage key; HMAC-sign it with a TTL.
  */
+/** Extensions a browser will actually paint inside an `<img>`. */
+const RENDERABLE_IMAGE = /\.(png|jpe?g|webp|gif|avif|svg)$/i;
+
+/**
+ * Whether this key points at something an `<img>` can display.
+ *
+ * A remote-driver key is already an absolute URL chosen by whoever configured
+ * that driver, and its extension is not reliable, so it is trusted — the same
+ * latitude `previewKeyKind` gives it. Everything else is judged by extension,
+ * because a local key ending `.json` or `.pdf` has real bytes behind it and
+ * will therefore sail past every "no bytes" check while still rendering as a
+ * broken image.
+ */
+export function isRenderableImageKey(key: string | null | undefined): boolean {
+  if (!key || key.startsWith('inline:')) return false;
+  if (/^https?:\/\//i.test(key)) return true;
+  return RENDERABLE_IMAGE.test(key);
+}
+
 export function previewKeyKind(key: string | null | undefined): 'none' | 'external' | 'sign' {
   if (!key || key.startsWith('inline:')) return 'none';
   if (/^https?:\/\//i.test(key)) return 'external';
