@@ -97,7 +97,8 @@ export const discoveryRuns = pgTable(
      * crawler on three pages out of eight should still produce a report and
      * say so, rather than throwing away five good pages.
      */
-    stageErrors: jsonb('stage_errors').$type<Array<{ stage: string; message: string; url?: string | null }>>()
+    stageErrors: jsonb('stage_errors')
+      .$type<Array<{ stage: string; message: string; url?: string | null; level?: 'error' | 'note' }>>()
       .notNull()
       .default([]),
     error: text('error'),

@@ -432,6 +432,28 @@ export const DiscoveryReport = z.object({
 });
 export type DiscoveryReport = z.infer<typeof DiscoveryReport>;
 
+/**
+ * Something worth telling the user about a run, of two different kinds.
+ *
+ * `error` — something failed, and the result is missing what that failure
+ * would have produced. These are what make a run `partial`.
+ *
+ * `note` — the run succeeded, by a route worth naming: it read served HTML
+ * because the browser was refused, it discarded challenge pages. A note is NOT
+ * a failure and must never downgrade a run, or a rescue that worked perfectly
+ * gets filed as a degraded result.
+ *
+ * Defaults to `error` so rows written before this field existed — all of which
+ * were genuine failures — keep their meaning.
+ */
+export const DiscoveryStageNote = z.object({
+  stage: z.string(),
+  message: z.string(),
+  url: z.string().nullish(),
+  level: z.enum(['error', 'note']).default('error'),
+});
+export type DiscoveryStageNote = z.infer<typeof DiscoveryStageNote>;
+
 export const DiscoveryRunDTO = z.object({
   id: z.string().uuid(),
   brandId: z.string().uuid().nullish(),
@@ -453,13 +475,32 @@ export const DiscoveryRunDTO = z.object({
   costUsd: z.number(),
   durationMs: z.number().nullish(),
   report: DiscoveryReport.nullish(),
-  stageErrors: z.array(z.object({ stage: z.string(), message: z.string(), url: z.string().nullish() })).default([]),
+  stageErrors: z.array(DiscoveryStageNote).default([]),
   error: z.string().nullish(),
   startedAt: z.string().nullish(),
   completedAt: z.string().nullish(),
   createdAt: z.string(),
 });
 export type DiscoveryRunDTO = z.infer<typeof DiscoveryRunDTO>;
+
+/**
+ * Whether a finished run is `completed` or `partial`.
+ *
+ * Lives here rather than in the worker because it is a rule about what the
+ * entries in `stageErrors` MEAN, and that meaning is defined immediately
+ * above. A run is partial when something failed — not when it succeeded by an
+ * unusual route. Treat every note as a failure and `partial` stops meaning
+ * anything: the runs that most need attention look exactly like the ones that
+ * worked.
+ *
+ * An absent `level` reads as `error`, matching the schema default, so rows
+ * written before notes existed keep their meaning.
+ */
+export function discoveryRunStatus(
+  stageErrors: ReadonlyArray<{ level?: 'error' | 'note' | null }>,
+): 'completed' | 'partial' {
+  return stageErrors.some((e) => (e.level ?? 'error') !== 'note') ? 'partial' : 'completed';
+}
 
 export const DiscoveryJobPayload = z.object({
   discoveryRunId: z.string().uuid(),

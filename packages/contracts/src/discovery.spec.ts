@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DiscoveryOptions, checkDiscoveryUrl } from './discovery';
+import { DiscoveryOptions, DiscoveryStageNote, checkDiscoveryUrl, discoveryRunStatus } from './discovery';
 
 /**
  * These are security tests, not validation tests.
@@ -216,5 +216,61 @@ describe('DiscoveryOptions', () => {
 
   it('refuses a crawl with no pages at all', () => {
     expect(DiscoveryOptions.safeParse({ maxPages: 0 }).success).toBe(false);
+  });
+});
+
+describe('discoveryRunStatus', () => {
+  /*
+   * The distinction this enforces was learned the expensive way.
+   *
+   * Discovery on a site that refuses crawlers now rescues itself by reading
+   * served HTML, and it says so by pushing a message onto `stageErrors`. That
+   * message went through the same array as real failures, so a rescue that
+   * harvested 25 pages and built a full ontology was recorded as `partial` --
+   * a degraded result -- and listed under the heading "pages could not be
+   * harvested". Grade every explanation as a failure and `partial` stops
+   * carrying information: the runs that need a human look identical to the
+   * ones that worked.
+   */
+  it('calls a run with only notes completed', () => {
+    expect(
+      discoveryRunStatus([
+        { level: 'note' },
+        { level: 'note' },
+      ]),
+    ).toBe('completed');
+  });
+
+  it('calls a run with any error partial, however many notes accompany it', () => {
+    expect(discoveryRunStatus([{ level: 'note' }, { level: 'error' }, { level: 'note' }])).toBe('partial');
+  });
+
+  it('treats a missing level as an error, so rows written before notes existed keep their meaning', () => {
+    // Every stageErrors entry ever written before this field was a failure.
+    // Reading them as notes would silently re-grade historical partial runs.
+    expect(discoveryRunStatus([{}])).toBe('partial');
+    expect(discoveryRunStatus([{ level: null }])).toBe('partial');
+  });
+
+  it('calls a clean run completed', () => {
+    expect(discoveryRunStatus([])).toBe('completed');
+  });
+});
+
+describe('DiscoveryStageNote', () => {
+  it('defaults level to error when the field is absent', () => {
+    expect(DiscoveryStageNote.parse({ stage: 'harvesting', message: 'boom' }).level).toBe('error');
+  });
+
+  it('preserves an explicit note, and a run of them stays completed', () => {
+    const note = DiscoveryStageNote.parse({ stage: 'harvesting', message: 'read from served HTML', level: 'note' });
+    expect(note.level).toBe('note');
+    expect(discoveryRunStatus([note])).toBe('completed');
+  });
+
+  it('rejects a level it does not know rather than defaulting it to note', () => {
+    // Defaulting an unrecognised level to `note` would let a typo silently
+    // stop a real failure from degrading the run.
+    expect(DiscoveryStageNote.safeParse({ stage: 'x', message: 'y', level: 'warning' }).success).toBe(false);
   });
 });

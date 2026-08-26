@@ -41,7 +41,13 @@ export function DiscoveryProgress({ runId, onDismiss }: { runId: string; onDismi
   // harvested nothing. It steers the banner's tone and is not itself a page
   // failure, so it is read here and kept out of the list below.
   const diagnosisKind = run.stageErrors.find((e) => e.message.startsWith('diagnosis:'))?.message.slice('diagnosis:'.length);
-  const harvestErrors = run.stageErrors.filter((e) => !e.message.startsWith('diagnosis:'));
+  const reportable = run.stageErrors.filter((e) => !e.message.startsWith('diagnosis:'));
+  // Notes explain how the run got its data; errors say what it could not get.
+  // Listing them together put "25 pages were read from served HTML" — a
+  // success — under the heading "pages could not be harvested", and counted it
+  // as one of them.
+  const harvestErrors = reportable.filter((e) => e.level !== 'note');
+  const harvestNotes = reportable.filter((e) => e.level === 'note');
 
   return (
     <Card>
@@ -136,6 +142,16 @@ export function DiscoveryProgress({ runId, onDismiss }: { runId: string; onDismi
           >
             {run.error}
           </p>
+        ) : null}
+
+        {harvestNotes.length > 0 ? (
+          <ul className="space-y-1">
+            {harvestNotes.map((e, i) => (
+              <li key={i} className="rounded-md bg-advisory-soft p-2 text-[11px] text-advisory-fg">
+                {e.message}
+              </li>
+            ))}
+          </ul>
         ) : null}
 
         {harvestErrors.length > 0 ? (
