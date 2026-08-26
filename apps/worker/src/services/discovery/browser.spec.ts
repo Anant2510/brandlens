@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { diagnoseHarvestFailure, isHttp2ProtocolError, isLikelyLogo } from './browser';
+import {
+  challengeRefusalDiagnosis,
+  classifyChallengePage,
+  corpusIsMostlyWalls,
+  diagnoseHarvestFailure,
+  isHttp2ProtocolError,
+  isLikelyLogo,
+} from './browser';
 
 describe('isHttp2ProtocolError', () => {
   /*
@@ -127,10 +134,130 @@ describe('diagnoseHarvestFailure', () => {
     expect(probed).toBe(false);
   });
 
+  it('cannot recognise a challenge page, which is exactly why challengeRefusalDiagnosis exists', async () => {
+    // This function reads THROWN navigation errors. A served CAPTCHA throws
+    // nothing, so the summary the harvest loop writes about it matches no
+    // network pattern and lands in `unknown` — which would skip the static
+    // fallback. Pinning that here so the reason for the separate function is
+    // recorded next to the behaviour that forces it.
+    const summary = '6 page(s) were bot-challenge interstitials (e.g. an Akamai/Cloudflare "access denied" or CAPTCHA page)';
+    const d = await diagnoseHarvestFailure('https://www.academy.com/', new Error(summary), reached);
+    expect(d.kind).toBe('unknown');
+  });
+
   it('stays honest about an error it does not recognise rather than guessing bot mitigation', async () => {
     // A non-network throw must never be labelled bot-refused, even if the
     // origin happens to be reachable — that would cry wolf on every render bug.
     const d = await diagnoseHarvestFailure('https://x/', new Error('page.evaluate: something threw'), reached);
     expect(d.kind).toBe('unknown');
+  });
+});
+
+describe('classifyChallengePage', () => {
+  const page = (over: Partial<Parameters<typeof classifyChallengePage>[0]>) =>
+    classifyChallengePage({ finalUrl: 'https://www.academy.com/x', title: 'Home', bodyText: 'x'.repeat(2000), httpStatus: 200, ...over });
+
+  it('catches the exact academy.com case: a captcha challenge URL titled access denied', () => {
+    // Six of eight harvested "pages" were this — HTTP 200, real DOM, the wrong
+    // thing to measure.
+    const v = classifyChallengePage({
+      finalUrl: 'https://www.academy.com/captcha/knfjvdun/challenge.html',
+      title: 'Access to this page has been denied.',
+      bodyText: 'Access to this page has been denied because we believe you are using automation tools.',
+      httpStatus: 200,
+    });
+    expect(v.isChallenge).toBe(true);
+    expect(v.reason).toContain('challenge URL');
+  });
+
+  it('catches the major WAF interstitials by title', () => {
+    for (const title of ['Just a moment...', 'Attention Required! | Cloudflare', 'Pardon Our Interruption', 'Access Denied']) {
+      expect({ title, hit: page({ finalUrl: 'https://x.com/', title }).isChallenge }).toMatchObject({ hit: true });
+    }
+  });
+
+  it('catches a thin body full of challenge markers even when the title looks innocent', () => {
+    const v = page({ title: 'Loading', bodyText: 'Please enable JavaScript and cookies to continue. Ray ID: 8f2c1a9b. Performance & security by Cloudflare.' });
+    expect(v.isChallenge).toBe(true);
+  });
+
+  it('does NOT condemn a real page that merely mentions a WAF in its copy', () => {
+    // A long marketing/engineering page about security is content, not a wall.
+    const v = page({
+      title: 'How we use Cloudflare to keep you safe',
+      bodyText: 'Our engineering team writes about access control and bot mitigation. '.repeat(60),
+    });
+    expect(v.isChallenge).toBe(false);
+  });
+
+  it('passes an ordinary brand page through', () => {
+    expect(page({ finalUrl: 'https://www.academy.com/c/hot-deals', title: 'Hot Deals & Special Offers | Academy' }).isChallenge).toBe(false);
+  });
+});
+
+describe('corpusIsMostlyWalls', () => {
+  it('is true for the defended-site shape: a couple of pages slipped past many walls', () => {
+    // academy.com: eight navigations, six of them challenge pages.
+    expect(corpusIsMostlyWalls(2, 6)).toBe(true);
+  });
+
+  it('is false for an ordinary crawl that hit one wall', () => {
+    expect(corpusIsMostlyWalls(18, 1)).toBe(false);
+  });
+
+  it('does not fire on a clean crawl', () => {
+    expect(corpusIsMostlyWalls(12, 0)).toBe(false);
+  });
+
+  it('does not fire on a tie — an even split is not evidence the sample is biased', () => {
+    expect(corpusIsMostlyWalls(4, 4)).toBe(false);
+  });
+
+  it('is false for an empty harvest, which the caller already handles as its own case', () => {
+    // Guarding the double-count: the handler tests `rendered === 0 || mostly`,
+    // and this returning true for (0, 0) would make the second clause a lie.
+    expect(corpusIsMostlyWalls(0, 0)).toBe(false);
+  });
+});
+
+describe('challengeRefusalDiagnosis', () => {
+  /*
+   * This exists because of a gap the challenge filter opened.
+   *
+   * `diagnoseHarvestFailure` reads a THROWN navigation error, and only calls
+   * bot-refusal when it recognises a network-level failure. A site that serves
+   * a CAPTCHA never throws — it answers 200 with a wall. Once the filter
+   * started discarding those, the run reached the failure branch carrying an
+   * error string that matched no network pattern, was classified `unknown`,
+   * and so skipped the static fallback that is the entire remedy. The filter
+   * would have turned "8 pages, 6 of them junk" into "0 pages, run failed".
+   *
+   * A served challenge is not a weaker signal than a reset connection; it is a
+   * stronger one. It gets its own answer rather than being fed to a classifier
+   * that cannot see it.
+   */
+  it('is bot-refused with the origin already known reachable, with no probe', () => {
+    const d = challengeRefusalDiagnosis(6);
+    expect(d.kind).toBe('bot-refused');
+    expect(d.originReached).toBe(true);
+  });
+
+  it('counts the walls in the detail, so the log says how defended the site was', () => {
+    expect(challengeRefusalDiagnosis(6).detail).toContain('6');
+  });
+
+  it('tells the person the site is up and refusing, not down', () => {
+    const hint = challengeRefusalDiagnosis(1).hint;
+    expect(hint).toMatch(/up and reachable/i);
+    expect(hint).toMatch(/refusing automation/i);
+    // And it must not read as a dead end: the fallback is what happens next.
+    expect(hint).toMatch(/plain request/i);
+  });
+
+  it('produces a kind the static fallback actually triggers on', () => {
+    // The regression guard: discover-brand.ts gates the fallback on exactly
+    // this string. If either side is renamed, this fails rather than silently
+    // disabling the remedy again.
+    expect(challengeRefusalDiagnosis(3).kind).toBe('bot-refused');
   });
 });

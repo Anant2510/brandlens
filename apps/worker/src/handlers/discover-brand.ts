@@ -28,7 +28,15 @@ import { env } from '../config';
 import { getContext } from '../context';
 import { logger } from '../logger';
 import { emitEvent } from '../services/outbox';
-import { DiscoveryBrowser, diagnoseHarvestFailure, type PageHarvest, type ViewportName } from '../services/discovery/browser';
+import {
+  DiscoveryBrowser,
+  challengeRefusalDiagnosis,
+  classifyChallengePage,
+  corpusIsMostlyWalls,
+  diagnoseHarvestFailure,
+  type PageHarvest,
+  type ViewportName,
+} from '../services/discovery/browser';
 import { staticHarvestSite } from '../services/discovery/static-harvest';
 import { type BrandEnrichment, type BrandEnrichmentProvider, buildProviders, domainOf, enrichBrand } from '../services/discovery/brand-enrichment';
 import { mergeEnrichment } from '../services/discovery/enrichment-merge';
@@ -137,11 +145,35 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
     const harvests: PageHarvest[] = [];
     let harvested = 0;
     let failed = 0;
+    let blocked = 0;
 
     for (let entry = frontier.next(); entry; entry = frontier.next()) {
       for (const viewport of options.viewports as ViewportName[]) {
         try {
           const harvest = await browser.harvest(entry.url, viewport);
+
+          // The browser connected, but a WAF may have answered with a challenge
+          // page instead of content — HTTP 200, real DOM, entirely the wrong
+          // thing to measure. Drop it before it pollutes the corpus, and do not
+          // follow its links: a challenge page only links deeper into itself.
+          const challenge = classifyChallengePage(harvest);
+          if (challenge.isChallenge) {
+            blocked += 1;
+            log.info({ url: entry.url, reason: challenge.reason }, 'discarded a bot-challenge page');
+            await ctx.withTenant(job.orgId, (tx) =>
+              tx.insert(discoveredPages).values({
+                orgId: job.orgId,
+                discoveryRunId: run.id,
+                url: entry.url,
+                depth: entry.depth,
+                role: entry.role,
+                viewport,
+                error: `bot challenge: ${challenge.reason}`,
+              }).onConflictDoNothing(),
+            );
+            continue;
+          }
+
           harvests.push(harvest);
 
           const stored = await storeHarvestedPage(ctx, job.orgId, run.id, harvest, entry, viewport);
@@ -182,15 +214,45 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
 
     await browser.close();
 
+    if (blocked > 0) {
+      // Surfaced, not swallowed: a run that silently dropped six pages would
+      // look like a thin site rather than a defended one.
+      stageErrors.push({
+        stage: 'harvesting',
+        message:
+          `${blocked} page(s) were bot-challenge interstitials (e.g. an Akamai/Cloudflare "access denied" ` +
+          'or CAPTCHA page) served instead of content, and were discarded so they could not be measured as ' +
+          'brand copy or colour.',
+      });
+    }
+
     let staticFallbackUsed = false;
-    if (harvests.length === 0) {
-      // The rendered harvest got nothing. Before giving up, work out WHY, and
-      // if the site refuses the browser but still serves plain HTTP, harvest
-      // what it does serve. A bot wall, an outage and a slow site all throw at
-      // page.goto; only a plain probe of the origin tells them apart.
+
+    /*
+     * Two different shortfalls send us to the plain-HTTP channel.
+     *
+     * The obvious one is an empty harvest. The less obvious one is a harvest
+     * that is mostly wall: when more navigations returned a challenge than
+     * returned content, the few that got through are not a sample of the site,
+     * they are whatever happened to slip past. Deriving a palette from those
+     * is worse than thin — it is confidently wrong about a brand on the
+     * strength of two stray pages. So we top the corpus up from the channel
+     * the site does keep open, rather than reporting a defended site as a
+     * small one.
+     */
+    const mostlyBlocked = corpusIsMostlyWalls(harvests.length, blocked);
+    if (harvests.length === 0 || mostlyBlocked) {
+      // Work out WHY before giving up. A bot wall, an outage and a slow site
+      // all throw at page.goto, and only a plain probe of the origin tells
+      // them apart — UNLESS the site already answered with a challenge page,
+      // which settles it outright and needs no probe.
       const firstError = stageErrors.find((e) => e.stage === 'harvesting')?.message ?? 'the site returned no renderable pages';
-      const diagnosis = await diagnoseHarvestFailure(run.originUrl, new Error(firstError));
-      log.warn({ diagnosis, originUrl: run.originUrl }, 'rendered harvest produced nothing');
+      const diagnosis =
+        blocked > 0 ? challengeRefusalDiagnosis(blocked) : await diagnoseHarvestFailure(run.originUrl, new Error(firstError));
+      log.warn(
+        { diagnosis, originUrl: run.originUrl, rendered: harvests.length, blocked },
+        harvests.length === 0 ? 'rendered harvest produced nothing' : 'rendered harvest was mostly bot challenges',
+      );
 
       if (diagnosis.kind === 'bot-refused' && options.staticFallback) {
         // The origin answered a plain request, so read the ontology from the
@@ -203,21 +265,28 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
           isAllowed: options.respectRobots ? (url) => isAllowed(robots, 'brandlens-discovery', url) : undefined,
           sleep,
         });
+        // On a top-up the browser already got some of these; the same URL
+        // harvested twice would double its colours' weight in the palette.
+        const already = new Set(harvests.map((h) => h.finalUrl));
+        let added = 0;
         for (const page of staticPages) {
+          if (already.has(page.finalUrl)) continue;
+          already.add(page.finalUrl);
           harvests.push(page);
           await storeHarvestedPage(ctx, job.orgId, run.id, page, { depth: 0, role: 'seed' }, 'desktop');
           harvested += 1;
+          added += 1;
         }
-        if (staticPages.length > 0) {
+        if (added > 0) {
           staticFallbackUsed = true;
           stageErrors.push({
             stage: 'harvesting',
             message:
-              `This site refused the rendered browser, so ${staticPages.length} page(s) were read from the ` +
+              `This site refused the rendered browser, so ${added} page(s) were read from the ` +
               'HTML it serves to a plain request. Colours and type are read from the CSS, not measured from a ' +
               'render, so treat them as lower-confidence until reviewed.',
           });
-          log.info({ pages: staticPages.length, originUrl: run.originUrl }, 'static fallback harvested pages');
+          log.info({ pages: added, originUrl: run.originUrl }, 'static fallback harvested pages');
         }
       }
 
@@ -614,6 +683,11 @@ async function storeHarvestedPage(
       })
       .returning({ id: assets.id });
 
+    const summary = {
+      textRuns: harvest.textRuns.length,
+      colors: harvest.colors.length,
+      images: harvest.images.length,
+    };
     await tx
       .insert(discoveredPages)
       .values({
@@ -626,14 +700,25 @@ async function storeHarvestedPage(
         httpStatus: harvest.httpStatus,
         viewport,
         assetId: asset.id,
-        extractSummary: {
-          textRuns: harvest.textRuns.length,
-          colors: harvest.colors.length,
-          images: harvest.images.length,
-        },
+        extractSummary: summary,
         renderMs: harvest.renderMs,
       })
-      .onConflictDoNothing();
+      // A row may already exist for this URL saying the browser hit a bot
+      // challenge. We have since harvested it for real — over plain HTTP, most
+      // likely — and the successful harvest is the truth. Leaving the failure
+      // row would list a page as blocked while its content sits in the
+      // ontology, so the later success overwrites it and clears the error.
+      .onConflictDoUpdate({
+        target: [discoveredPages.discoveryRunId, discoveredPages.url, discoveredPages.viewport],
+        set: {
+          title: harvest.title,
+          httpStatus: harvest.httpStatus,
+          assetId: asset.id,
+          extractSummary: summary,
+          renderMs: harvest.renderMs,
+          error: null,
+        },
+      });
 
     return true;
   });
