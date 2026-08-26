@@ -204,7 +204,11 @@ export class DiscoveryService {
       costUsd: row.costUsd,
       durationMs: row.durationMs,
       report: (row.report ?? null) as DiscoveryRunDTO['report'],
-      stageErrors: row.stageErrors ?? [],
+      // Rows written before `level` existed carry none, and every one of them
+      // was a genuine failure — so an absent level reads as `error` here, the
+      // same default the contract applies. Doing it at the boundary means the
+      // UI never has to ask whether a missing level means "old row" or "note".
+      stageErrors: (row.stageErrors ?? []).map((e) => ({ ...e, level: e.level ?? ('error' as const) })),
       error: row.error,
       startedAt: row.startedAt?.toISOString() ?? null,
       completedAt: row.completedAt?.toISOString() ?? null,

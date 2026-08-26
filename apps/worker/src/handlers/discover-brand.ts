@@ -5,6 +5,7 @@ import {
   type DiscoveryReport,
   type DiscoveryStage,
   checkDiscoveryUrl,
+  discoveryRunStatus,
 } from '@brandlens/contracts';
 import {
   assets,
@@ -103,7 +104,9 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
   }
 
   const options = DiscoveryOptions.parse(run.options ?? {});
-  const stageErrors: Array<{ stage: string; message: string; url?: string | null }> = [];
+  // `level` defaults to 'error' at every push site that omits it; only the two
+  // "this is how the run got its data" messages are notes. See the contract.
+  const stageErrors: Array<{ stage: string; message: string; url?: string | null; level?: 'error' | 'note' }> = [];
   const browser = new DiscoveryBrowser();
 
   const setStage = async (stage: DiscoveryStage, progress = 0, extra: Record<string, unknown> = {}) => {
@@ -219,6 +222,7 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
       // look like a thin site rather than a defended one.
       stageErrors.push({
         stage: 'harvesting',
+        level: 'note',
         message:
           `${blocked} page(s) were bot-challenge interstitials (e.g. an Akamai/Cloudflare "access denied" ` +
           'or CAPTCHA page) served instead of content, and were discarded so they could not be measured as ' +
@@ -281,6 +285,7 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
           staticFallbackUsed = true;
           stageErrors.push({
             stage: 'harvesting',
+            level: 'note',
             message:
               `This site refused the rendered browser, so ${added} page(s) were read from the ` +
               'HTML it serves to a plain request. Colours and type are read from the CSS, not measured from a ' +
@@ -288,6 +293,16 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
           });
           log.info({ pages: added, originUrl: run.originUrl }, 'static fallback harvested pages');
         }
+
+        // The loop above owns the progress counters, and the top-up happens
+        // after it has stopped running. Without this the run reports "0 pages
+        // harvested" for the whole of extraction and induction while 25 pages
+        // of ontology are being built from — which reads as a broken run.
+        await setStage('harvesting', 1, {
+          pagesDiscovered: frontier.discovered,
+          pagesHarvested: harvested,
+          pagesFailed: failed,
+        });
       }
 
       if (harvests.length === 0) {
@@ -509,7 +524,10 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
       },
     };
 
-    const status = stageErrors.length > 0 ? 'partial' : 'completed';
+    // Defined in @brandlens/contracts next to the shape it reads, so the rule
+    // "a note is not a failure" has one home and the worker cannot drift from
+    // what the UI believes.
+    const status = discoveryRunStatus(stageErrors);
 
     await ctx.withTenant(job.orgId, async (tx) => {
       await tx
@@ -865,6 +883,55 @@ async function ensureBrand(
   const slug = `${slugify(name)}-${hashObject({ originUrl }).slice(0, 6)}`.slice(0, 120);
 
   return ctx.withTenant(orgId, async (tx) => {
+    /*
+     * This function is called ensureBrand, and it was a bare INSERT.
+     *
+     * The slug is deterministic by design — same name, same origin, same slug
+     * — so the SECOND discovery of a site collided with the first and killed
+     * the run on `brands_org_slug_uq`. Discovery is the one operation a person
+     * naturally repeats (a site changes, a harvest was thin, the first run was
+     * measuring CAPTCHAs), and it was the one operation that could only be run
+     * once.
+     *
+     * Identity is the ORIGIN, not the name. Looking up by slug alone would
+     * still split one site across two brands whenever the discovered name
+     * shifted — "Academy Sports + Outdoors" from a rendered crawl versus
+     * "academy.com" from served HTML is the same company — so the origin
+     * recorded in settings is checked first.
+     */
+    const [byOrigin] = await tx
+      .select({ id: brands.id, deletedAt: brands.deletedAt })
+      .from(brands)
+      .where(and(eq(brands.orgId, orgId), sql`${brands.settings}->>'discoveredFrom' = ${originUrl}`))
+      .limit(1);
+
+    const [existing] = byOrigin
+      ? [byOrigin]
+      : await tx
+          .select({ id: brands.id, deletedAt: brands.deletedAt })
+          .from(brands)
+          .where(and(eq(brands.orgId, orgId), eq(brands.slug, slug)))
+          .limit(1);
+
+    if (existing) {
+      // Deliberately NOT refreshing name, description or positioning: a person
+      // may have corrected them since the first run, and a re-crawl is not a
+      // reason to overwrite their edit with whatever the CSS said today. Only
+      // the discovery bookkeeping is updated.
+      await tx
+        .update(brands)
+        .set({
+          updatedAt: new Date(),
+          // Re-discovering a site that was archived is a request to have it
+          // back. Leaving it soft-deleted would write this run's identity into
+          // a brand that never appears anywhere.
+          ...(existing.deletedAt ? { deletedAt: null } : {}),
+          settings: sql`${brands.settings} || ${JSON.stringify({ rediscoveredAt: new Date().toISOString() })}::jsonb`,
+        })
+        .where(eq(brands.id, existing.id));
+      return existing.id;
+    }
+
     const [row] = await tx
       .insert(brands)
       .values({
@@ -875,6 +942,9 @@ async function ensureBrand(
         positioning: corpus[0]?.description ?? null,
         settings: { discoveredFrom: originUrl, discoveredAt: new Date().toISOString() },
       })
+      // Two runs on the same origin started together would both miss the reads
+      // above and race to insert. The loser takes the winner's row.
+      .onConflictDoUpdate({ target: [brands.orgId, brands.slug], set: { updatedAt: new Date() } })
       .returning({ id: brands.id });
     return row.id;
   });
