@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, normalize, resolve, sep } from 'node:path';
+import { dirname, normalize, resolve, sep } from 'node:path';
+import { resolveStorageRoot } from '@brandlens/api/storage/workspace-root';
 import { env } from '../config';
 
 /**
@@ -16,8 +17,20 @@ export class StorageService {
   private readonly root: string;
 
   constructor() {
-    const configured = env.STORAGE_LOCAL_ROOT;
-    this.root = isAbsolute(configured) ? normalize(configured) : resolve(process.cwd(), configured);
+    /*
+     * The same resolution the API and the seed use — not `resolve(cwd, ...)`.
+     *
+     * PM2 starts the API with cwd apps/api and the worker with cwd
+     * apps/worker, so the shipped relative default `./.storage` resolved to a
+     * DIFFERENT directory in each process. The worker wrote every discovery
+     * screenshot to apps/worker/.storage; the API looked under <repo>/.storage,
+     * found nothing, and served 404 behind every page thumbnail in a report.
+     *
+     * That bug was found and fixed once, in the API and the seed, and
+     * resolveStorageRoot's own comment says "the two must agree; if you change
+     * one, change both". There were three. This is the third.
+     */
+    this.root = resolveStorageRoot(env.STORAGE_LOCAL_ROOT);
   }
 
   get driver(): string {
