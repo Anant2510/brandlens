@@ -231,6 +231,9 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
     }
 
     let staticFallbackUsed = false;
+    // Set only when the plain channel was tried AND answered with nothing but
+    // challenge pages — the one case where there is genuinely no way in.
+    let walledEverywhere = false;
 
     /*
      * Two different shortfalls send us to the plain-HTTP channel.
@@ -263,12 +266,13 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
         // HTML it serves. This is the channel the site keeps open, taken
         // honestly — see static-harvest.ts on why that is not evasion.
         await setStage('harvesting', 0.5, { note: 'browser refused; reading served HTML' });
-        const staticPages = await staticHarvestSite(run.seedUrl, {
+        const staticResult = await staticHarvestSite(run.seedUrl, {
           maxPages: options.maxPages,
           crawlDelayMs: politeDelay,
           isAllowed: options.respectRobots ? (url) => isAllowed(robots, 'brandlens-discovery', url) : undefined,
           sleep,
         });
+        const staticPages = staticResult.pages;
         // On a top-up the browser already got some of these; the same URL
         // harvested twice would double its colours' weight in the palette.
         const already = new Set(harvests.map((h) => h.finalUrl));
@@ -294,6 +298,23 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
           log.info({ pages: added, originUrl: run.originUrl }, 'static fallback harvested pages');
         }
 
+        walledEverywhere = staticResult.blocked > 0 && staticResult.pages.length === 0;
+
+        if (staticResult.blocked > 0) {
+          // Worth saying out loud even when the fallback still found content:
+          // it tells the reader the plain channel is defended too, so a thin
+          // corpus is the site's doing rather than a bug in the crawl.
+          stageErrors.push({
+            stage: 'harvesting',
+            level: 'note',
+            message:
+              `${staticResult.blocked} plain-HTTP request(s) were also answered with a bot-challenge page ` +
+              'rather than content, and were discarded. This site defends the plain channel as well as the ' +
+              'rendered one, so the pages below are what it was willing to serve.',
+          });
+          log.info({ blocked: staticResult.blocked, originUrl: run.originUrl }, 'static harvest was walled too');
+        }
+
         // The loop above owns the progress counters, and the top-up happens
         // after it has stopped running. Without this the run reports "0 pages
         // harvested" for the whole of extraction and induction while 25 pages
@@ -309,6 +330,21 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
         // Even the plain channel gave nothing, or the failure was not a bot
         // wall. Record the machine-readable kind and fail with the honest hint.
         stageErrors.unshift({ stage: 'harvesting', message: `diagnosis:${diagnosis.kind}` });
+
+        // The bot-refused hint promises the plain channel as the way through.
+        // When that channel answered with walls too, repeating the promise
+        // would be telling the person to wait for something that already
+        // happened and failed. This is the one honest dead end: the site is
+        // closed to us on every channel we are willing to use.
+        if (walledEverywhere) {
+          throw new Error(
+            `Nothing could be harvested from ${run.originUrl}. The site answered both the rendered browser and ` +
+              'plain HTTP requests with bot-challenge pages rather than content, so there is nothing to measure. ' +
+              'Upload the brand book or brand assets directly, or point discovery at a press or brand-guidelines ' +
+              'page that is served without a challenge.',
+          );
+        }
+
         throw new Error(
           `Nothing could be harvested from ${run.originUrl}. ${diagnosis.hint}` +
             (diagnosis.kind === 'bot-refused' ? '' : ` (${diagnosis.detail})`),
