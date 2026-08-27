@@ -217,3 +217,47 @@ describe('a challenge page served over plain HTTP', () => {
     expect(classifyChallengePage(parsed.harvest).isChallenge).toBe(false);
   });
 });
+
+describe('what a static harvest refuses to claim', () => {
+  /*
+   * This path reads served HTML and CSS. It knows the family the stylesheet
+   * names and the role the markup implies. It does not know what the browser
+   * would have computed, and the fields that would say so are null.
+   *
+   * The version this replaces filled all three in: a per-role size constant,
+   * 400/700 for weight, and — the one that gives the game away — a bbox whose
+   * `width` was `text.length`. A character count, in a field named and shaped
+   * exactly like a measured pixel box, flowing into anything downstream that
+   * reads geometry.
+   */
+  const page = parseStaticPage(
+    '<!doctype html><html><head><title>Acme</title>' +
+      '<style>body{font-family:"Open Sans",sans-serif;color:#111}</style></head>' +
+      '<body><h1>Gear up</h1><p>Shop the new season range today.</p>' +
+      '<footer><p>© 2026 Acme. Terms apply.</p></footer></body></html>',
+    'https://acme.com/',
+    'body{font-family:"Open Sans",sans-serif}',
+    200,
+  );
+
+  it('reports no size for any run', () => {
+    expect(page.harvest.textRuns.length).toBeGreaterThan(0);
+    expect(page.harvest.textRuns.every((r) => r.fontSizePx === null)).toBe(true);
+  });
+
+  it('reports no weight for any run', () => {
+    expect(page.harvest.textRuns.every((r) => r.fontWeight === null)).toBe(true);
+  });
+
+  it('reports no geometry at all, rather than a character count wearing pixels', () => {
+    expect(page.harvest.textRuns.every((r) => r.bbox === null)).toBe(true);
+  });
+
+  it('still reports the family and the role, which the page really does state', () => {
+    const h1 = page.harvest.textRuns.find((r) => r.text.includes('Gear up'));
+    expect(h1?.role).toBe('display');
+    expect(h1?.fontFamily.toLowerCase()).toContain('open sans');
+    const legal = page.harvest.textRuns.find((r) => r.text.includes('Terms apply'));
+    expect(legal?.role).toBe('legal');
+  });
+});

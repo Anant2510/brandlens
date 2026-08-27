@@ -303,7 +303,21 @@ export const DiscoveredTypeStyle = z.object({
   name: z.string(),
   fontFamily: z.string(),
   fontWeight: z.number().int().nullish(),
-  fontSizePx: z.number(),
+  /**
+   * Null when the harvest could not measure it.
+   *
+   * A rendered crawl reads this off the layout engine. A static crawl — the
+   * fallback for sites that refuse a browser — resolves no cascade and lays
+   * nothing out, so it has no size to report. It used to report one anyway,
+   * from a per-role constant, and that number reached the ontology and became
+   * the floor in a proposed "type must not be set smaller than…" rule.
+   *
+   * Consumers must treat null as absent, never as zero and never as a default.
+   * `synthesizeRules` drops unsized styles from every size-derived rule while
+   * still proposing the font-family rule, which is grounded in the site's own
+   * stylesheet and remains true.
+   */
+  fontSizePx: z.number().nullable(),
   lineHeightPx: z.number().nullish(),
   letterSpacingPx: z.number().nullish(),
   role: z.string(), // display|heading|subheading|body|caption|button|legal

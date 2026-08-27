@@ -78,7 +78,10 @@ export function mergeEnrichment(
       name: `${font.name} (via ${enrichment.provider})`,
       fontFamily: font.name,
       fontWeight: font.role === 'display' ? 700 : 400,
-      fontSizePx: font.role === 'display' ? 40 : 16,
+      // A provider tells us the brand uses this typeface. It does not tell us
+      // what size the brand sets it at, and 40/16 was this file's own guess
+      // wearing the same field name as a measured value.
+      fontSizePx: null,
       lineHeightPx: null,
       letterSpacingPx: null,
       role: font.role === 'unknown' ? 'body' : font.role,

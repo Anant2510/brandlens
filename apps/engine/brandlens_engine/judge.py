@@ -148,7 +148,12 @@ def build_brand_ontology(brand: EngineBrandContext, max_items: int = 12) -> str:
         swatches = ", ".join(f"{t.path}={t.hex}" + (f" ({t.role})" if t.role else "") for t in brand.color_tokens[:max_items])
         lines.append(f"\nCOLOUR TOKENS: {swatches}")
     if brand.type_styles:
-        styles = ", ".join(f"{s.name}={s.font_family} {int(s.font_weight)}" for s in brand.type_styles[:max_items])
+        # A style whose weight was never measured is described without one.
+        # Stating "400" would invite the judge to treat regular as required.
+        styles = ", ".join(
+            f"{s.name}={s.font_family}" + (f" {int(s.font_weight)}" if s.font_weight is not None else "")
+            for s in brand.type_styles[:max_items]
+        )
         lines.append(f"TYPE STYLES: {styles}")
     if brand.lexicon:
         banned = [e.term for e in brand.lexicon if e.kind == "banned"][:max_items]

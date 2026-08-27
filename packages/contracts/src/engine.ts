@@ -66,7 +66,13 @@ export const EngineBrandContext = z.object({
       role: z.string(),
       fontFamily: z.string(),
       fontAliases: z.array(z.string()).default([]),
-      fontWeight: z.number(),
+      /**
+       * Null when the ontology never measured it. The engine must not enforce
+       * a weight it was never shown — `typography.py` already skips the weight
+       * comparison when this is absent, which is the correct behaviour and the
+       * reason absence has to be expressible here at all.
+       */
+      fontWeight: z.number().nullable(),
       minSizePx: z.number().nullable().optional(),
       minSizePt: z.number().nullable().optional(),
       minSizePctOfCanvas: z.number().nullable().optional(),

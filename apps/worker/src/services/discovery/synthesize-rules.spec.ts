@@ -279,3 +279,53 @@ describe('synthesizeRules — degenerate inputs', () => {
     expect(new Set(k).size).toBe(k.length);
   });
 });
+
+describe('styles whose size was never measured', () => {
+  /*
+   * A static harvest — the fallback for a site that refuses a browser — reads
+   * HTML and CSS. It resolves no cascade and lays nothing out, so it knows the
+   * font FAMILY (the site's own stylesheet says so) and the ROLE (the site's
+   * own markup says so), and it does not know the size.
+   *
+   * It used to supply one anyway, from a per-role constant: display 44,
+   * heading 30, body 16. Those numbers reached the ontology and became the
+   * floor inside a proposed rule reading "type must not be set smaller than
+   * the minimum recorded for its style" — a rule about somebody's brand,
+   * derived from a lookup table, in a product whose whole claim is that it
+   * measures rather than guesses. A reviewer approving it would be enforcing
+   * a number the site never showed us against real creative.
+   *
+   * So: no size, no size rule. The family rule stays, because it is true.
+   */
+  const unsized = () => type({ name: 'body', fontSizePx: null, fontWeight: null, lineHeightPx: null });
+
+  it('proposes no minimum-size rule when nothing was measured', () => {
+    const keys = synthesizeRules({ ...base, typeStyles: [unsized()] }).map((r) => r.key);
+    expect(keys).not.toContain('typography.min-size');
+  });
+
+  it('proposes no font-size floor either — the floor would be invented, not observed', () => {
+    const keys = synthesizeRules({ ...base, typeStyles: [unsized()] }).map((r) => r.key);
+    expect(keys).not.toContain('accessibility.font-size-floor');
+  });
+
+  it('still proposes the font-family rule, which the stylesheet genuinely grounds', () => {
+    const keys = synthesizeRules({ ...base, typeStyles: [unsized()] }).map((r) => r.key);
+    expect(keys).toContain('typography.approved-family');
+  });
+
+  it('uses only the measured styles when a run has both kinds', () => {
+    // A top-up run: some pages rendered, some read as HTML. The rule must be
+    // built from the 12px that was seen, and must not be dragged down by an
+    // unsized style being read as zero.
+    const rules = synthesizeRules({
+      ...base,
+      typeStyles: [type({ fontSizePx: 12, role: 'legal' }), unsized()],
+    });
+    const minSize = rules.find((r) => r.key === 'typography.min-size');
+    expect(minSize).toBeDefined();
+    const observed = (minSize?.support as { observed?: Array<{ floorPx: number }> } | undefined)?.observed ?? [];
+    expect(observed).toHaveLength(1);
+    expect(observed[0].floorPx).toBe(12);
+  });
+});

@@ -167,7 +167,12 @@ describe('harvest → extract → synthesize, against a real rendered page', () 
     expect(failures.length).toBeGreaterThan(0);
     expect(failures.some((f) => f.text.includes('too faint'))).toBe(true);
 
-    const smallest = Math.min(...styles.filter((s) => s.role !== 'display').map((s) => s.fontSizePx));
+    // A RENDERED harvest must measure every size — null is reserved for the
+    // static path, and a null appearing here would mean the browser stopped
+    // reporting computed styles.
+    const body = styles.filter((s) => s.role !== 'display');
+    expect(body.every((s) => typeof s.fontSizePx === 'number')).toBe(true);
+    const smallest = Math.min(...body.map((s) => s.fontSizePx as number));
     expect(smallest).toBeLessThanOrEqual(10); // the 9px footer line was seen
 
     /* --------------------------------------------------------------- links */

@@ -1041,13 +1041,23 @@ async function persistIdentity(
           name: style.name.slice(0, 120),
           role: style.role.slice(0, 60),
           fontFamily: style.fontFamily.slice(0, 200),
-          fontWeight: style.fontWeight ?? 400,
+          // Not `?? 400`. The column is nullable now precisely so an
+          // unmeasured weight can be stored as unmeasured.
+          fontWeight: style.fontWeight ?? null,
           // The observed size becomes the enforceable floor for that role;
           // creative smaller than the site's own body copy is the failure the
           // rule is meant to catch.
+          // Null when the harvest never measured it. The column is nullable
+          // precisely so "no floor recorded" can be stored as absent; writing
+          // a placeholder here would put an invented floor into the ontology,
+          // where an analyzer would enforce it against real creative.
           minSizePx: style.fontSizePx,
-          lineHeightRatio: style.lineHeightPx ? round(style.lineHeightPx / style.fontSizePx, 3) : null,
-          letterSpacingEm: style.letterSpacingPx ? round(style.letterSpacingPx / style.fontSizePx, 4) : null,
+          // Both ratios are per-em, so an unmeasured size makes them
+          // uncomputable rather than merely unknown.
+          lineHeightRatio:
+            style.lineHeightPx && style.fontSizePx ? round(style.lineHeightPx / style.fontSizePx, 3) : null,
+          letterSpacingEm:
+            style.letterSpacingPx && style.fontSizePx ? round(style.letterSpacingPx / style.fontSizePx, 4) : null,
           scaleRank: index + 1,
         })
         .onConflictDoNothing();
