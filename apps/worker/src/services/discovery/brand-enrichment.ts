@@ -77,6 +77,34 @@ export interface BrandEnrichmentProvider {
   enrich(domain: string): Promise<BrandEnrichment | null>;
 }
 
+/**
+ * What a finished harvest-and-enrich amounts to.
+ *
+ *  - `crawled`       the site was read; enrichment, if any, only tops it up.
+ *  - `provider-only` the site could not be read on any channel we are willing
+ *                    to use, but a by-domain provider had a record. The brand's
+ *                    identity is recovered from that record as CANDIDATE data.
+ *  - `dead-end`      neither the site nor any provider yielded anything.
+ *
+ * This is the honest alternative to the one thing this codebase will not do:
+ * send a disguised user-agent until a refusing site relents. A provider indexes
+ * a brand's public identity and serves it over its own API without ever
+ * touching the site, so a site refusing our crawler is irrelevant to it. What
+ * the provider returns is a third-party assertion — "the brand's blue is
+ * #1946c8" — not an observation of the brand's own usage, so a `provider-only`
+ * run yields identity to CONFIRM and proposes no rules to ENFORCE. A rule
+ * implies we watched the brand hold itself to something; on this path we did
+ * not, and a rule minted from a lookup would be the same dishonesty as a
+ * measurement minted from a constant.
+ */
+export type RunOutcome = 'crawled' | 'provider-only' | 'dead-end';
+
+export function classifyRunOutcome(input: { harvestedPages: number; enrichmentLanded: boolean }): RunOutcome {
+  if (input.harvestedPages > 0) return 'crawled';
+  if (input.enrichmentLanded) return 'provider-only';
+  return 'dead-end';
+}
+
 /** Bare host for a URL or domain string — what these APIs key on. */
 export function domainOf(input: string): string | null {
   const raw = input.trim().toLowerCase();

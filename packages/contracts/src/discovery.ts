@@ -441,7 +441,7 @@ export const DiscoveryReport = z.object({
      * from the HTML it serves — colours and type are declared, not measured, so
      * the whole report is lower-confidence and the UI says so.
      */
-    harvestMode: z.enum(['rendered', 'static']).default('rendered'),
+    harvestMode: z.enum(['rendered', 'static', 'provider']).default('rendered'),
   }),
 });
 export type DiscoveryReport = z.infer<typeof DiscoveryReport>;

@@ -39,7 +39,14 @@ import {
   type ViewportName,
 } from '../services/discovery/browser';
 import { staticHarvestSite } from '../services/discovery/static-harvest';
-import { type BrandEnrichment, type BrandEnrichmentProvider, buildProviders, domainOf, enrichBrand } from '../services/discovery/brand-enrichment';
+import {
+  type BrandEnrichment,
+  type BrandEnrichmentProvider,
+  buildProviders,
+  classifyRunOutcome,
+  domainOf,
+  enrichBrand,
+} from '../services/discovery/brand-enrichment';
 import { mergeEnrichment } from '../services/discovery/enrichment-merge';
 import { CrawlFrontier } from '../services/discovery/frontier';
 import {
@@ -234,6 +241,13 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
     // Set only when the plain channel was tried AND answered with nothing but
     // challenge pages — the one case where there is genuinely no way in.
     let walledEverywhere = false;
+    // When the harvest comes back empty we no longer fail here. We let the
+    // by-domain enrichment run first — a site that refuses our crawler may
+    // still be indexed by a provider that never touches it — and decide
+    // between a provider-only rescue and an honest dead end only once we know
+    // what that provider returned. This holds the message we would fail with.
+    let harvestEmpty = false;
+    let deadEndMessage = '';
 
     /*
      * Two different shortfalls send us to the plain-HTTP channel.
@@ -334,28 +348,25 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
       }
 
       if (harvests.length === 0) {
-        // Even the plain channel gave nothing, or the failure was not a bot
-        // wall. Record the machine-readable kind and fail with the honest hint.
+        // The crawl got nothing. Record the machine-readable kind and remember
+        // the honest failure message, but do NOT fail yet: the by-domain
+        // provider below has not been asked, and it is the one source that a
+        // site refusing our crawler cannot deny us. We fail only if it too
+        // comes back empty.
+        harvestEmpty = true;
         stageErrors.unshift({ stage: 'harvesting', message: `diagnosis:${diagnosis.kind}` });
 
-        // The bot-refused hint promises the plain channel as the way through.
-        // When that channel answered with walls too, repeating the promise
-        // would be telling the person to wait for something that already
-        // happened and failed. This is the one honest dead end: the site is
-        // closed to us on every channel we are willing to use.
-        if (walledEverywhere) {
-          throw new Error(
+        deadEndMessage = walledEverywhere
+          ? // The bot-refused hint promises the plain channel as the way
+            // through. When that channel answered with walls too, repeating
+            // the promise would be telling the person to wait for something
+            // that already happened and failed.
             `Nothing could be harvested from ${run.originUrl}. The site answered both the rendered browser and ` +
-              'plain HTTP requests with bot-challenge pages rather than content, so there is nothing to measure. ' +
-              'Upload the brand book or brand assets directly, or point discovery at a press or brand-guidelines ' +
-              'page that is served without a challenge.',
-          );
-        }
-
-        throw new Error(
-          `Nothing could be harvested from ${run.originUrl}. ${diagnosis.hint}` +
-            (diagnosis.kind === 'bot-refused' ? '' : ` (${diagnosis.detail})`),
-        );
+            'plain HTTP requests with bot-challenge pages rather than content, and no brand-data provider had a ' +
+            'record for this domain. Upload the brand book or brand assets directly, or point discovery at a ' +
+            'press or brand-guidelines page that is served without a challenge.'
+          : `Nothing could be harvested from ${run.originUrl}. ${diagnosis.hint}` +
+            (diagnosis.kind === 'bot-refused' ? '' : ` (${diagnosis.detail})`);
       }
     }
 
@@ -394,6 +405,11 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
           enrichmentProvider = enrichment.provider;
           stageErrors.push({
             stage: 'extracting',
+            // A note, not a failure: enrichment succeeding is good news. Left
+            // at the default 'error' level it marked every enriched run
+            // `partial`, which is the same "a note is not a failure" mistake
+            // the harvest notes already carry a level to avoid.
+            level: 'note',
             message:
               `Enriched with brand data from ${enrichment.provider}: ${enrichment.colors.length} colour(s), ` +
               `${enrichment.fonts.length} font(s), ${enrichment.logos.length} logo(s). These are candidate ` +
@@ -401,6 +417,35 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
           });
         }
       }
+    }
+
+    /* --- Outcome: crawled, provider-only, or a dead end -------------------
+     * The harvest may have come back empty. Now that the by-domain provider
+     * has had its turn, decide what this run is. A refused site that a provider
+     * knew becomes a provider-only run: candidate identity, no rules — see
+     * classifyRunOutcome for why a rule cannot be minted from an assertion we
+     * never watched the brand honour.
+     * -------------------------------------------------------------------- */
+    const outcome = classifyRunOutcome({ harvestedPages: harvests.length, enrichmentLanded: enrichmentProvider !== null });
+    const providerOnly = outcome === 'provider-only';
+
+    if (outcome === 'dead-end') {
+      throw new Error(deadEndMessage || `Nothing could be harvested from ${run.originUrl}.`);
+    }
+
+    if (providerOnly) {
+      log.info({ originUrl: run.originUrl, provider: enrichmentProvider }, 'provider-only rescue: identity from by-domain record');
+      stageErrors.push({
+        stage: 'harvesting',
+        // Error level on purpose: the primary method failed and the result is
+        // materially weaker than a crawl. That earns `partial` and a prominent
+        // banner, not a quiet note.
+        message:
+          `This site could not be read on any channel discovery is willing to use — it refuses the crawler by ` +
+          `name. The identity below was fetched from ${enrichmentProvider} by domain and is UNCONFIRMED candidate ` +
+          'data, not measured from the site. No rules were proposed, because nothing about the brand’s own usage ' +
+          'was observed. Confirm the identity, then re-run discovery against a page the site will serve.',
+      });
     }
 
     const brandName = deriveBrandName(corpus, run.originUrl);
@@ -415,16 +460,21 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
      * outage must cost the brand its voice section, not its whole ontology.
      * -------------------------------------------------------------------- */
     let copy: Awaited<ReturnType<typeof runCopyPass>> = null;
-    try {
-      copy = await runCopyPass(ctx, job.orgId, brandId, brandName, run.originUrl, corpus);
-      if (copy) {
-        await persistCopyOntology(ctx, job.orgId, brandId, copy);
-        for (const warning of copy.warnings) stageErrors.push({ stage: 'extracting', message: warning });
+    // Skipped on a provider-only run: the corpus is empty, and the copy pass is
+    // an LLM call over the site's prose. A provider record carries identity, not
+    // words, so there is nothing here to read.
+    if (!providerOnly) {
+      try {
+        copy = await runCopyPass(ctx, job.orgId, brandId, brandName, run.originUrl, corpus);
+        if (copy) {
+          await persistCopyOntology(ctx, job.orgId, brandId, copy);
+          for (const warning of copy.warnings) stageErrors.push({ stage: 'extracting', message: warning });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        stageErrors.push({ stage: 'extracting', message: `copy analysis failed: ${message}` });
+        log.warn({ err }, 'copy pass failed; the report keeps its measured identity');
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      stageErrors.push({ stage: 'extracting', message: `copy analysis failed: ${message}` });
-      log.warn({ err }, 'copy pass failed; the report keeps its measured identity');
     }
 
     await setStage('extracting', 1, { brandId, tokensProposed: palette.length });
@@ -434,16 +484,25 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
 
     const uniquePages = new Set(corpus.map((h) => h.finalUrl)).size;
 
-    const proposed = [
-      ...synthesizeRules({
-        colors: palette,
-        typeStyles: styles,
-        pageCount: uniquePages,
-        logoDetected: logos.length > 0 && logos[0].confidence >= 0.5,
-        contrastFailures: contrastFailures.length,
-      }),
-      ...(copy ? synthesizeCopyRules({ copy, pageCount: uniquePages }) : []),
-    ];
+    // No rules on a provider-only run. Every rule synthesised below asserts we
+    // OBSERVED the brand holding to something — a palette measured across N
+    // pages, a type floor seen in use. On this path we observed nothing; the
+    // identity is a third-party record. Minting a rule from it would be the
+    // same dishonesty as the static harvest minting a size from a constant, and
+    // it is caught here rather than downstream because this is where "observed"
+    // stops being true. The identity is still persisted above, as candidates.
+    const proposed = providerOnly
+      ? []
+      : [
+          ...synthesizeRules({
+            colors: palette,
+            typeStyles: styles,
+            pageCount: uniquePages,
+            logoDetected: logos.length > 0 && logos[0].confidence >= 0.5,
+            contrastFailures: contrastFailures.length,
+          }),
+          ...(copy ? synthesizeCopyRules({ copy, pageCount: uniquePages }) : []),
+        ];
 
     const ruleIds = await ctx.withTenant(job.orgId, (tx) =>
       insertProposedRules(tx, job.orgId, brandId, proposed, 'inductive', null),
@@ -468,7 +527,10 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
     /* ============================================================== CHECK */
     let selfCheck: SelfCheckResult = { ran: false, pagesChecked: 0, findingsTotal: 0, blockersTotal: 0, score: null, top: [] };
 
-    if (options.runSelfCheck) {
+    // A provider-only run has no rules to check and no harvested pages to check
+    // them against, so self-check would grade an empty ruleset over an empty
+    // corpus and report a meaningless 100%.
+    if (options.runSelfCheck && !providerOnly) {
       await setStage('checking', 0);
       try {
         selfCheck = await runSelfCheck(ctx, job.orgId, brandId, ruleset.id, ruleset.hash, run.id, (p) =>
@@ -563,7 +625,7 @@ export async function discoverBrand(job: DiscoverBrandJob): Promise<void> {
         // implied it had seen the site would be the most damaging kind of
         // wrong: confident, tidy, and missing the evidence that mattered.
         skipped: frontier.skipped().map((e) => ({ url: e.url, reason: 'crawl budget reached' })),
-        harvestMode: staticFallbackUsed ? 'static' : 'rendered',
+        harvestMode: providerOnly ? 'provider' : staticFallbackUsed ? 'static' : 'rendered',
       },
     };
 

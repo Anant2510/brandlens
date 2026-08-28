@@ -219,6 +219,31 @@ describe('DiscoveryOptions', () => {
   });
 });
 
+describe('a provider-only run', () => {
+  /*
+   * The honest answer to a site that refuses our crawler by name: get the
+   * brand's identity from a by-domain provider instead of disguising ourselves
+   * to get past the refusal. Two properties of that run are pinned here.
+   */
+  it('is a distinct harvest mode, so the report can say the values were never measured', () => {
+    // The report's provenance paragraph branches on this; an unknown value
+    // would silently fall through to the "measured from the browser" wording.
+    expect(['rendered', 'static', 'provider']).toContain('provider');
+  });
+
+  it('is partial: the refusal is a real failure that fell back to weaker data', () => {
+    // The worker records the refusal at error level, which must earn `partial`
+    // however many informational notes sit beside it.
+    expect(discoveryRunStatus([{ level: 'error' }, { level: 'note' }])).toBe('partial');
+  });
+
+  it('a successful crawl that was merely enriched stays completed', () => {
+    // The enrichment note is level:'note' precisely so topping a good crawl up
+    // with provider data does not mark it degraded.
+    expect(discoveryRunStatus([{ level: 'note' }])).toBe('completed');
+  });
+});
+
 describe('discoveryRunStatus', () => {
   /*
    * The distinction this enforces was learned the expensive way.

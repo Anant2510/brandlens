@@ -493,29 +493,41 @@ function ProvenanceFooter({
         <CardTitle>How this was produced</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2 text-[11px] leading-5 text-fg-muted">
-        <p>
-          Crawled <span className="num">{run.originUrl}</span> on {formatDateTime(run.createdAt)}, honouring
-          robots.txt, at most {run.options.maxPages} pages and depth {run.options.maxDepth}.{' '}
-          {/*
-            This sentence is the whole point of this section — how much to trust
-            what is above it — and it was hardcoded to the rendered case. On a
-            run that fell back to plain HTTP it claimed values were "measured
-            from the browser's computed styles" when no browser ever ran them,
-            which is the one place in the report that must not be boilerplate.
-          */}
-          {report.coverage.harvestMode === 'static' ? (
-            <>
-              This site refused the rendered browser, so colour and type were read from the CSS it serves to a plain
-              request — parsed values rather than measured ones, without the cascade resolved. Treat them as
-              lower-confidence, and note that no page screenshots exist for this run.
-            </>
-          ) : (
-            <>
-              Colour and type were measured from the browser&apos;s computed styles — exact values, not inferred from
-              pixels.
-            </>
-          )}
-        </p>
+        {/*
+          This sentence is the whole point of this section — how much to trust
+          what is above it — and it was once hardcoded to the rendered case. Its
+          three branches are the three ways a run gets its data, and they must
+          not be interchangeable boilerplate: a provider-only run in particular
+          measured NOTHING, and saying otherwise would be the worst lie the
+          report can tell.
+        */}
+        {report.coverage.harvestMode === 'provider' ? (
+          <p>
+            This site could not be read on any channel discovery is willing to use — it refuses the crawler by name,
+            and discovery honours that rather than disguising itself. The identity below was fetched from a brand-data
+            provider <span className="num">by domain</span> and is <strong className="font-medium text-fg">unconfirmed
+            candidate data</strong>, not measured from <span className="num">{run.originUrl}</span>. No rules were
+            proposed, because nothing about the brand&apos;s own usage was observed. Confirm the identity, then re-run
+            discovery against a page the site will serve.
+          </p>
+        ) : (
+          <p>
+            Crawled <span className="num">{run.originUrl}</span> on {formatDateTime(run.createdAt)}, honouring
+            robots.txt, at most {run.options.maxPages} pages and depth {run.options.maxDepth}.{' '}
+            {report.coverage.harvestMode === 'static' ? (
+              <>
+                This site refused the rendered browser, so colour and type were read from the CSS it serves to a plain
+                request — parsed values rather than measured ones, without the cascade resolved. Treat them as
+                lower-confidence, and note that no page screenshots exist for this run.
+              </>
+            ) : (
+              <>
+                Colour and type were measured from the browser&apos;s computed styles — exact values, not inferred from
+                pixels.
+              </>
+            )}
+          </p>
+        )}
         <p>
           All {report.ruleset.proposed} rules are <strong className="font-medium text-fg">proposed</strong>. None is
           active. Ruleset hash <span className="num">{report.ruleset.hash?.slice(0, 12) ?? '—'}</span>.

@@ -3,6 +3,7 @@ import {
   BrandfetchProvider,
   LogoDevProvider,
   buildProviders,
+  classifyRunOutcome,
   domainOf,
   enrichBrand,
   mapBrandfetch,
@@ -161,5 +162,30 @@ describe('enrichBrand', () => {
 
   it('returns null when nothing is configured or nothing has a record', async () => {
     expect(await enrichBrand('x.com', [])).toBeNull();
+  });
+});
+
+describe('classifyRunOutcome', () => {
+  /*
+   * The honest answer to "the site refuses brandlens-discovery". Not a
+   * disguised user-agent — a different SOURCE. A by-domain provider holds the
+   * brand's public identity and never touches the site, so it rescues a fully
+   * refused run into candidate identity rather than a dead end. What it must
+   * NOT do is mint rules: the provider asserts the brand's colours, it does not
+   * show us the brand living by them, and a rule with nothing behind it is the
+   * failure this whole system exists to avoid.
+   */
+  it('is crawled whenever any page was harvested, provider or not', () => {
+    expect(classifyRunOutcome({ harvestedPages: 8, enrichmentLanded: true })).toBe('crawled');
+    expect(classifyRunOutcome({ harvestedPages: 1, enrichmentLanded: false })).toBe('crawled');
+  });
+
+  it('is provider-only when nothing was harvested but a provider had a record', () => {
+    // northerntrust.com: refused on every channel, present in Brandfetch.
+    expect(classifyRunOutcome({ harvestedPages: 0, enrichmentLanded: true })).toBe('provider-only');
+  });
+
+  it('is a dead end when neither the site nor any provider yielded anything', () => {
+    expect(classifyRunOutcome({ harvestedPages: 0, enrichmentLanded: false })).toBe('dead-end');
   });
 });
