@@ -1,3 +1,5 @@
+import { connect as netConnect } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { logger } from '../../logger';
 
@@ -157,6 +159,58 @@ export type OriginProbe = { reached: boolean; status?: number; error?: string };
  * non-browser client, which is exactly the state that distinguishes a bot wall
  * from an outage.
  */
+/**
+ * Is the host up, without asking it for anything or claiming to be anyone?
+ *
+ * `probeOrigin` below sends a real HTTP request carrying our identified
+ * user-agent, so a site that refuses `brandlens-discovery` by name stalls it
+ * and the run gets reported as "the site could not be reached from this
+ * host". northerntrust.com does exactly that: from the same machine, the same
+ * URL answers 200 to a generic client and times out for ours. Telling the user
+ * their network could not reach a site that is plainly reachable sends them to
+ * debug the wrong thing.
+ *
+ * This opens a socket and completes the TLS handshake, then closes. No
+ * request, no headers, no user-agent — so it settles "is this host up" without
+ * pretending to be a browser to find out, which is the line this codebase does
+ * not cross. A host that accepts TLS and then refuses our HTTP request has
+ * made a decision about us, and the report should say so.
+ */
+export async function probeReachable(url: string, timeoutMs = 8_000): Promise<boolean> {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return false;
+  }
+  const secure = target.protocol === 'https:';
+  const port = Number(target.port) || (secure ? 443 : 80);
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.destroy();
+      } catch {
+        /* already gone */
+      }
+      resolve(ok);
+    };
+
+    const socket = secure
+      ? tlsConnect({ host: target.hostname, port, servername: target.hostname, timeout: timeoutMs }, () => done(true))
+      : netConnect({ host: target.hostname, port, timeout: timeoutMs }, () => done(true));
+
+    socket.setTimeout(timeoutMs, () => done(false));
+    socket.on('error', () => done(false));
+    // A TLS peer that rejects our certificate handling still proved it is
+    // there and listening, which is the only question being asked.
+    socket.on('secureConnect', () => done(true));
+  });
+}
+
 export async function probeOrigin(url: string, timeoutMs = 10_000): Promise<OriginProbe> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -234,6 +288,7 @@ export async function diagnoseHarvestFailure(
   url: string,
   error: unknown,
   probe: (url: string) => Promise<OriginProbe> = probeOrigin,
+  reachable: (url: string) => Promise<boolean> = probeReachable,
 ): Promise<HarvestDiagnosis> {
   const detail = error instanceof Error ? error.message : String(error);
 
@@ -274,6 +329,34 @@ export async function diagnoseHarvestFailure(
         'Upload the brand book or brand assets directly, or point discovery at a press or brand-guidelines page.',
     };
   }
+  /*
+   * The HTTP probe carries our identified user-agent, so its failure has two
+   * possible meanings and they call for opposite advice: the host is down, or
+   * the host is up and refusing US. Reporting the second as the first sends a
+   * person to debug their network while the site serves its homepage to any
+   * other client — which is exactly what northerntrust.com did.
+   *
+   * A socket that completes a TLS handshake settles it, and settles it without
+   * claiming to be anyone: no request, no headers, no user-agent. If the host
+   * accepts the connection and then refuses our HTTP request, that is a
+   * decision about this crawler, and the honest response is to say so and stop
+   * — not to send a different user-agent until one gets through.
+   */
+  const hostIsUp = await reachable(url);
+  if (hostIsUp) {
+    return {
+      kind: 'bot-refused',
+      detail,
+      originReached: true,
+      plainHttpWorthTrying: true,
+      hint:
+        'This site accepts connections but refuses requests identifying as brandlens-discovery — the same URL ' +
+        'answers other clients normally. That is a deliberate policy against crawlers, not an outage, and ' +
+        'discovery honours it rather than disguising itself. Upload the brand book or brand assets directly, ' +
+        'or point discovery at a press or brand-guidelines page the site is willing to serve.',
+    };
+  }
+
   if (NAV_TIMEOUT.test(detail)) {
     return {
       kind: 'timeout',
@@ -282,7 +365,7 @@ export async function diagnoseHarvestFailure(
       // The probe failed, but the probe is one bare GET. A site that stalls it
       // may still serve a polite identified crawl, so this does not veto.
       plainHttpWorthTrying: true,
-      hint: 'The site did not respond in time and a plain request could not reach it either — it may be down or blocking this network.',
+      hint: 'The site did not respond in time, and a plain request could not reach it or open a socket to it either — it may be down.',
     };
   }
   return {
@@ -290,7 +373,7 @@ export async function diagnoseHarvestFailure(
     detail,
     originReached: false,
     plainHttpWorthTrying: true,
-    hint: `The site could not be reached from this host (${result.error ?? 'no response'}).`,
+    hint: `No connection could be opened to this host at all (${result.error ?? 'no response'}) — check the address is public and reachable from this network.`,
   };
 }
 

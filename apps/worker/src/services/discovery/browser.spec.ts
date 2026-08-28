@@ -87,6 +87,10 @@ describe('diagnoseHarvestFailure', () => {
   const reached = async () => ({ reached: true, status: 200 });
   const reached403 = async () => ({ reached: true, status: 403 });
   const unreached = async () => ({ reached: false, error: 'fetch failed' });
+  // Socket-level reachability, injected in every case so no unit test opens a
+  // real connection. `up` = the host accepts TLS; `down` = nothing listening.
+  const up = async () => true;
+  const down = async () => false;
 
   it('calls it bot mitigation when a browser is reset but a plain request gets through', async () => {
     /*
@@ -100,26 +104,26 @@ describe('diagnoseHarvestFailure', () => {
       'page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.academy.com/',
       'page.goto: Timeout 30000ms exceeded.',
     ]) {
-      const d = await diagnoseHarvestFailure('https://www.academy.com/', new Error(detail), reached);
+      const d = await diagnoseHarvestFailure('https://www.academy.com/', new Error(detail), reached, down);
       expect({ detail, kind: d.kind }).toMatchObject({ kind: 'bot-refused' });
       expect(d.hint).toMatch(/bot mitigation|refused the automated browser/i);
     }
   });
 
   it('treats a 403 to the plain probe as reached — the server is up and choosing to refuse', async () => {
-    const d = await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), reached403);
+    const d = await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), reached403, down);
     expect(d.kind).toBe('bot-refused');
     expect(d.originReached).toBe(true);
   });
 
   it('calls it unreachable when neither the browser nor a plain request can connect', async () => {
-    const d = await diagnoseHarvestFailure('https://nope/', new Error('net::ERR_CONNECTION_RESET'), unreached);
+    const d = await diagnoseHarvestFailure('https://nope/', new Error('net::ERR_CONNECTION_RESET'), unreached, down);
     expect(d.kind).toBe('unreachable');
-    expect(d.hint).toContain('could not be reached');
+    expect(d.hint).toContain('No connection could be opened');
   });
 
   it('separates a timeout that no plain request can reach from a bot wall', async () => {
-    const d = await diagnoseHarvestFailure('https://slow/', new Error('Timeout 30000ms exceeded.'), unreached);
+    const d = await diagnoseHarvestFailure('https://slow/', new Error('Timeout 30000ms exceeded.'), unreached, down);
     expect(d.kind).toBe('timeout');
   });
 
@@ -129,7 +133,7 @@ describe('diagnoseHarvestFailure', () => {
       probed = true;
       return { reached: true };
     };
-    const d = await diagnoseHarvestFailure('https://typo/', new Error('net::ERR_NAME_NOT_RESOLVED'), probe);
+    const d = await diagnoseHarvestFailure('https://typo/', new Error('net::ERR_NAME_NOT_RESOLVED'), probe, down);
     expect(d.kind).toBe('unreachable');
     expect(probed).toBe(false);
   });
@@ -141,15 +145,49 @@ describe('diagnoseHarvestFailure', () => {
     // fallback. Pinning that here so the reason for the separate function is
     // recorded next to the behaviour that forces it.
     const summary = '6 page(s) were bot-challenge interstitials (e.g. an Akamai/Cloudflare "access denied" or CAPTCHA page)';
-    const d = await diagnoseHarvestFailure('https://www.academy.com/', new Error(summary), reached);
+    const d = await diagnoseHarvestFailure('https://www.academy.com/', new Error(summary), reached, down);
     expect(d.kind).toBe('unknown');
   });
 
   it('stays honest about an error it does not recognise rather than guessing bot mitigation', async () => {
     // A non-network throw must never be labelled bot-refused, even if the
     // origin happens to be reachable — that would cry wolf on every render bug.
-    const d = await diagnoseHarvestFailure('https://x/', new Error('page.evaluate: something threw'), reached);
+    const d = await diagnoseHarvestFailure('https://x/', new Error('page.evaluate: something threw'), reached, down);
     expect(d.kind).toBe('unknown');
+  });
+
+  /*
+   * northerntrust.com, measured from the user's VM: the same URL answers 200
+   * to a generic client and times out when the request identifies as
+   * brandlens-discovery. Our HTTP probe carries that identity, so it failed,
+   * and the run was reported as "the site could not be reached from this
+   * host" — sending a person to debug a network that was working perfectly.
+   *
+   * A socket that completes TLS settles it without claiming to be anyone. The
+   * host is up; it has made a decision about this crawler. The report says so,
+   * and discovery stops rather than trying another user-agent until one works.
+   */
+  it('calls it refusal, not an outage, when a socket connects but our identified request does not', async () => {
+    const d = await diagnoseHarvestFailure('https://www.northerntrust.com/', new Error('net::ERR_CONNECTION_RESET'), unreached, up);
+    expect(d.kind).toBe('bot-refused');
+    expect(d.originReached).toBe(true);
+    expect(d.hint).toMatch(/refuses requests identifying as brandlens-discovery/i);
+  });
+
+  it('says so for a stalled request too, not only a reset one', async () => {
+    const d = await diagnoseHarvestFailure('https://www.northerntrust.com/', new Error('Timeout 30000ms exceeded.'), unreached, up);
+    expect(d.kind).toBe('bot-refused');
+  });
+
+  it('does not offer to disguise itself, and points at what the site will serve', async () => {
+    const hint = (await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), unreached, up)).hint;
+    expect(hint).toMatch(/honours it rather than disguising/i);
+    expect(hint).toMatch(/brand book|brand-guidelines/i);
+  });
+
+  it('still calls it an outage when nothing accepts a socket either', async () => {
+    const d = await diagnoseHarvestFailure('https://gone/', new Error('net::ERR_CONNECTION_RESET'), unreached, down);
+    expect(d.kind).toBe('unreachable');
   });
 });
 
@@ -280,33 +318,36 @@ describe('plainHttpWorthTrying', () => {
    */
   const reached = async () => ({ reached: true, status: 200 });
   const unreached = async () => ({ reached: false, error: 'fetch failed' });
+  const up = async () => true;
+  const down = async () => false;
 
   it('is true for a timeout whose probe also failed — the case that was silently skipped', async () => {
-    const d = await diagnoseHarvestFailure('https://www.northerntrust.com/', new Error('page.goto: Timeout 30000ms exceeded.'), unreached);
+    const d = await diagnoseHarvestFailure('https://www.northerntrust.com/', new Error('page.goto: Timeout 30000ms exceeded.'), unreached, down);
     expect(d.kind).toBe('timeout');
     expect(d.plainHttpWorthTrying).toBe(true);
   });
 
   it('is true for a connection reset the probe could not get past either', async () => {
-    const d = await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), unreached);
+    const d = await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), unreached, down);
     expect(d.kind).toBe('unreachable');
     expect(d.plainHttpWorthTrying).toBe(true);
   });
 
   it('is true for a confirmed bot wall, and for a served challenge page', async () => {
-    const d = await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), reached);
+    const d = await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), reached, down);
     expect(d.plainHttpWorthTrying).toBe(true);
     expect(challengeRefusalDiagnosis(4).plainHttpWorthTrying).toBe(true);
+    expect((await diagnoseHarvestFailure('https://x/', new Error('net::ERR_CONNECTION_RESET'), unreached, up)).plainHttpWorthTrying).toBe(true);
   });
 
   it('is true for a render bug, because the browser plainly reached the site', async () => {
-    const d = await diagnoseHarvestFailure('https://x/', new Error('page.evaluate: something threw'), reached);
+    const d = await diagnoseHarvestFailure('https://x/', new Error('page.evaluate: something threw'), reached, down);
     expect(d.kind).toBe('unknown');
     expect(d.plainHttpWorthTrying).toBe(true);
   });
 
   it('is FALSE only when the domain does not resolve — nothing to send a request to', async () => {
-    const d = await diagnoseHarvestFailure('https://typo/', new Error('net::ERR_NAME_NOT_RESOLVED'), reached);
+    const d = await diagnoseHarvestFailure('https://typo/', new Error('net::ERR_NAME_NOT_RESOLVED'), reached, down);
     expect(d.plainHttpWorthTrying).toBe(false);
   });
 });
