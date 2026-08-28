@@ -191,14 +191,26 @@ function IdentitySection({ report }: { report: DiscoveryReport }) {
                     className="truncate text-fg"
                     style={{
                       fontFamily: `${JSON.stringify(style.fontFamily)}, system-ui, sans-serif`,
-                      fontSize: `${Math.min(style.fontSizePx, 22)}px`,
+                      // A specimen rendered at 16px when the size is unknown is
+                      // a preview, not a claim; the caption below says so.
+                      fontSize: `${Math.min(style.fontSizePx ?? 16, 22)}px`,
                       fontWeight: style.fontWeight ?? 400,
                     }}
                   >
                     {style.fontFamily}
                   </p>
                   <p className="num text-[11px] text-fg-subtle">
-                    {style.role} · {style.fontSizePx}px / {style.fontWeight ?? 400}
+                    {style.role} ·{' '}
+                    {style.fontSizePx === null ? (
+                      // Never "null px", and never a stand-in number. The size
+                      // was not measured, and the caption is where that gets
+                      // said rather than quietly filled in.
+                      <span title="This run read the site's HTML without a browser, so no size was measured.">
+                        size not measured
+                      </span>
+                    ) : (
+                      `${style.fontSizePx}px / ${style.fontWeight ?? 400}`
+                    )}
                     {style.lineHeightPx ? ` · line-height ${style.lineHeightPx}px` : ''} · {style.occurrences} uses
                   </p>
                 </div>

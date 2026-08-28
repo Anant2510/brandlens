@@ -216,8 +216,8 @@ export interface PageTextRuns {
 export function extractTypeStyles(pages: PageTextRuns[], options: { max?: number } = {}): DiscoveredTypeStyle[] {
   interface Bucket {
     family: string;
-    sizePx: number;
-    weight: number;
+    sizePx: number | null;
+    weight: number | null;
     role: string;
     count: number;
     lineHeights: number[];
@@ -229,15 +229,24 @@ export function extractTypeStyles(pages: PageTextRuns[], options: { max?: number
 
   for (const page of pages) {
     for (const run of page.runs) {
-      if (!run.text?.trim() || !run.fontSizePx) continue;
+      if (!run.text?.trim()) continue;
 
       const family = primaryFontFamily(run.fontFamily);
-      const sizePx = bucketSize(run.fontSizePx);
+      /*
+       * Size and weight are null on a static harvest — nothing was laid out,
+       * so nothing was measured. The run is still kept: the family came from
+       * the site's own stylesheet and the role from its own markup, and both
+       * are real. Only the numbers are missing, and a style with a family and
+       * no size is honest input for a font-family rule while being correctly
+       * useless to a minimum-size one.
+       */
+      const sizePx = run.fontSizePx === null ? null : bucketSize(run.fontSizePx);
       // 400/500 and 600/700 are the same intent expressed with different
       // numbers on different sites; three tiers is what a brand book actually
       // distinguishes.
-      const weight = run.fontWeight >= 600 ? 700 : run.fontWeight >= 500 ? 500 : 400;
-      const key = `${family}|${sizePx}|${weight}|${run.role}`;
+      const weight =
+        run.fontWeight === null ? null : run.fontWeight >= 600 ? 700 : run.fontWeight >= 500 ? 500 : 400;
+      const key = `${family}|${sizePx ?? 'unsized'}|${weight ?? 'unweighted'}|${run.role}`;
 
       const bucket = buckets.get(key) ?? {
         family,
@@ -258,13 +267,15 @@ export function extractTypeStyles(pages: PageTextRuns[], options: { max?: number
   }
 
   return [...buckets.values()]
-    .sort((a, b) => b.count - a.count || b.sizePx - a.sizePx)
+    .sort((a, b) => b.count - a.count || (b.sizePx ?? 0) - (a.sizePx ?? 0))
     .slice(0, options.max ?? 10)
     .map((b) => ({
-      name: `${b.role}/${Math.round(b.sizePx)}${b.weight === 400 ? '' : `-${b.weight}`}`,
+      // An unsized style is named for its role alone. "body/16" would be a
+      // claim about a measurement we do not have.
+      name: b.sizePx === null ? b.role : `${b.role}/${Math.round(b.sizePx)}${b.weight === 400 ? '' : `-${b.weight}`}`,
       fontFamily: b.family,
       fontWeight: b.weight,
-      fontSizePx: round(b.sizePx, 1),
+      fontSizePx: b.sizePx === null ? null : round(b.sizePx, 1),
       lineHeightPx: b.lineHeights.length ? round(median(b.lineHeights), 1) : null,
       letterSpacingPx: b.letterSpacings.length ? round(median(b.letterSpacings), 2) : null,
       role: b.role,
@@ -347,6 +358,11 @@ export function findContrastFailures(
       const bg = parseCssColor(run.backgroundColor);
       if (!fg || !bg) continue;
 
+      // WCAG's large-text allowance is a function of measured size and
+      // weight. Without them there is no defensible threshold to test against,
+      // and guessing one would either invent a pass or invent a failure — so
+      // the run is skipped and the report simply has less to say.
+      if (run.fontSizePx === null || run.fontWeight === null) continue;
       // WCAG "large text": 18.66px bold, or 24px at any weight.
       const isLarge = run.fontSizePx >= 24 || (run.fontSizePx >= 18.66 && run.fontWeight >= 700);
       const required = isLarge ? largeMin : minRatio;

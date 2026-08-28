@@ -305,8 +305,25 @@ export interface TextRun {
   selector: string;
   text: string;
   fontFamily: string;
-  fontSizePx: number;
-  fontWeight: number;
+  /*
+   * NULLABLE, and the nullability is the point.
+   *
+   * A rendered harvest reads these off the layout engine: they are what the
+   * user's browser actually computed. A static harvest cannot know any of
+   * them — there is no cascade resolved, no font loaded, nothing laid out —
+   * and it used to fill them in anyway: a per-role constant for the size, 400
+   * or 700 for the weight, and a bbox whose `width` was the number of
+   * CHARACTERS in the string. Those numbers then flowed into the type scale,
+   * into the ontology, and into proposed rules like "type must not be set
+   * smaller than the minimum recorded for its style" — a rule about a brand,
+   * derived from a lookup table, in a product whose claim is that it measures
+   * rather than infers.
+   *
+   * `null` means not measured. Every consumer must decide what to do without
+   * it; none of them may invent a stand-in.
+   */
+  fontSizePx: number | null;
+  fontWeight: number | null;
   lineHeightPx: number | null;
   letterSpacingPx: number | null;
   textTransform: string;
@@ -314,7 +331,8 @@ export interface TextRun {
   /** The colour actually painted behind this text, walked up the ancestors. */
   backgroundColor: string;
   role: string;
-  bbox: { x: number; y: number; width: number; height: number };
+  /** Null when nothing was laid out — see fontSizePx. */
+  bbox: { x: number; y: number; width: number; height: number } | null;
 }
 
 export interface PaintedColor {

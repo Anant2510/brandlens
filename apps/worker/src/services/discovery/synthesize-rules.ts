@@ -158,7 +158,16 @@ export function synthesizeRules(input: SynthesisInput, options: SynthesisOptions
    * and `appliesTo`. The analyzer reads neither: both rules displayed a
    * threshold in the console and enforced the ontology's floors regardless.
    */
-  const sizedStyles = input.typeStyles.filter((s) => s.fontSizePx > 0);
+  /*
+   * `fontSizePx` is null for a style whose size was never measured — a static
+   * harvest of a site that refuses browsers. Such a style still grounds the
+   * font-family rule above, which reads the site's own stylesheet, but it
+   * cannot ground a rule about minimum size: there is no minimum to record.
+   * The two rules below are therefore skipped rather than fed a stand-in.
+   */
+  const sizedStyles = input.typeStyles.filter(
+    (s): s is typeof s & { fontSizePx: number } => typeof s.fontSizePx === 'number' && s.fontSizePx > 0,
+  );
   if (sizedStyles.length > 0) {
     const perRole = [...new Map(sizedStyles.map((s) => [s.role, s])).keys()].sort();
     rules.push({

@@ -178,7 +178,12 @@ export function fontsFromCss(css: string): string[] {
 // ---------------------------------------------------------------------------
 // The page
 // ---------------------------------------------------------------------------
-const ROLE_SIZE: Record<string, number> = { display: 44, heading: 30, subheading: 22, body: 16, legal: 12, button: 15 };
+/*
+ * There used to be a ROLE_SIZE table here — display 44, heading 30, body 16 —
+ * standing in for sizes this path cannot measure. It is gone rather than
+ * merely unused: a table of plausible numbers next to a parser is an invitation
+ * to fill a gap with one.
+ */
 
 function roleForTag(tag: string, inFooter: boolean): string {
   switch (tag) {
@@ -302,17 +307,21 @@ export function parseStaticPage(html: string, url: string, css: string, httpStat
       selector: tag,
       text,
       fontFamily: primaryFont,
-      fontSizePx: ROLE_SIZE[role] ?? 16,
-      fontWeight: role === 'display' || role === 'heading' ? 700 : 400,
+      // Not measured, and therefore not stated. Reading HTML tells us this is
+      // an h1 and that the sheet names Open Sans; it does not tell us what
+      // size or weight the browser would have resolved. See TextRun.
+      fontSizePx: null,
+      fontWeight: null,
       lineHeightPx: null,
       letterSpacingPx: null,
       textTransform: 'none',
       color: '',
       backgroundColor: '',
       role,
-      // No geometry without rendering; width stands in for text length so the
-      // clusterer still has a magnitude to weight by.
-      bbox: { x: 0, y: 0, width: text.length, height: ROLE_SIZE[role] ?? 16 },
+      // No geometry without rendering. This used to report the character
+      // count as `width` and a role constant as `height`, in a field named
+      // and shaped exactly like a measured pixel box.
+      bbox: null,
     });
   }
 

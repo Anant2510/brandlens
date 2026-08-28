@@ -318,3 +318,57 @@ describe('findContrastFailures', () => {
     expect(fails[0].ratio).toBeLessThan(fails[1].ratio);
   });
 });
+
+describe('runs whose size and weight were never measured', () => {
+  /*
+   * The static-harvest shape. The clusterer used to drop these entirely
+   * (`if (!run.fontSizePx) continue`), which threw away the family and role —
+   * both real, both read from the site — along with the numbers that were not.
+   * Keeping the style with a null size is what lets a font-family rule be
+   * proposed while a minimum-size rule correctly cannot be.
+   */
+  const unmeasured = (over: Partial<TextRun> = {}) =>
+    run({ fontSizePx: null, fontWeight: null, bbox: null, color: '', backgroundColor: '', ...over });
+
+  it('keeps the style and reports its size as null rather than dropping it', () => {
+    const styles = extractTypeStyles([
+      { url: 'https://acme.com/', runs: [unmeasured({ text: 'Gear up', role: 'display', fontFamily: 'Open Sans' })] },
+    ]);
+    expect(styles).toHaveLength(1);
+    expect(styles[0]).toMatchObject({ fontFamily: 'Open Sans', role: 'display', fontSizePx: null, fontWeight: null });
+  });
+
+  it('names an unsized style for its role alone, with no invented number in the name', () => {
+    const styles = extractTypeStyles([
+      { url: 'https://acme.com/', runs: [unmeasured({ text: 'Body copy here', role: 'body' })] },
+    ]);
+    expect(styles[0].name).toBe('body');
+    expect(styles[0].name).not.toMatch(/\d/);
+  });
+
+  it('keeps measured and unmeasured styles apart instead of merging them', () => {
+    const styles = extractTypeStyles([
+      {
+        url: 'https://acme.com/',
+        runs: [
+          run({ text: 'Measured body', role: 'body', fontFamily: 'Inter', fontSizePx: 16, fontWeight: 400 }),
+          unmeasured({ text: 'Unmeasured body', role: 'body', fontFamily: 'Inter' }),
+        ],
+      },
+    ]);
+    expect(styles).toHaveLength(2);
+    expect(new Set(styles.map((s) => s.fontSizePx))).toEqual(new Set([16, null]));
+  });
+
+  it('skips a run with no size when judging contrast, rather than assuming small text', () => {
+    // WCAG's large-text allowance is a function of measured size and weight.
+    // Guessing either way invents a pass or invents a failure.
+    const failures = findContrastFailures([
+      {
+        url: 'https://acme.com/',
+        runs: [unmeasured({ text: 'faint', color: 'rgb(200,200,200)', backgroundColor: 'rgb(255,255,255)' })],
+      },
+    ]);
+    expect(failures).toHaveLength(0);
+  });
+});

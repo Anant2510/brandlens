@@ -189,7 +189,10 @@ class TypeStyle(Wire):
     role: str
     font_family: str
     font_aliases: list[str] = Field(default_factory=list)
-    font_weight: float
+    # None when the ontology never measured it (a static crawl of a site that
+    # refuses browsers). Consumers must skip the weight check rather than
+    # substitute 400 -- see typography.py, which already does.
+    font_weight: float | None = None
     min_size_px: float | None = None
     min_size_pt: float | None = None
     min_size_pct_of_canvas: float | None = None

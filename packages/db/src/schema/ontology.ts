@@ -207,7 +207,14 @@ export const typeStyles = pgTable(
     /** Every string that must resolve to this face:
      *  "Helvetica Neue LT Pro 65 Medium", "HelveticaNeueLTPro-Md", … */
     fontAliases: text('font_aliases').array().notNull().default(sql`ARRAY[]::text[]`),
-    fontWeight: integer('font_weight').notNull().default(400),
+    /**
+     * Null when the harvest never measured it — a static crawl of a site that
+     * refuses browsers resolves no cascade, so it has no weight to report.
+     * This was NOT NULL DEFAULT 400, and the worker wrote `weight ?? 400`, so
+     * "we never looked" was stored as "we saw regular" and handed to the
+     * engine's brand context as though observed.
+     */
+    fontWeight: integer('font_weight'),
     isItalic: boolean('is_italic').notNull().default(false),
 
     minSizePx: real('min_size_px'),
