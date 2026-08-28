@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { previewKeyKind, toDto, type AssetRow } from './assets.service';
+import { previewKeyKind, toDto, type AssetRow, isRenderableImageKey } from './assets.service';
 
 /**
  * Regression guard for the defect where `/assets` rendered a placeholder for
@@ -76,5 +76,50 @@ describe('toDto', () => {
     // The key is only ever exposed via a signed, expiring URL. Shipping it in
     // the DTO would let a client address another tenant's object directly.
     expect(JSON.stringify(toDto(row))).not.toContain('originals/');
+  });
+});
+
+describe('isRenderableImageKey', () => {
+  /*
+   * A discovery page harvested over plain HTTP has no screenshot. It is stored
+   * as its structured source under `…/<hash>.json`, and that key has real bytes
+   * behind it — so it walked past `previewKeyKind`'s "no bytes" check, got
+   * signed, and was handed to the report as a preview URL. The grid rendered
+   * broken-image icons pointing at JSON, and the report gave no hint that the
+   * reason was "this site was read without a browser".
+   *
+   * A preview URL is for an <img>. If an <img> cannot paint it, the honest
+   * answer is null and a placeholder that says so.
+   */
+  it('rejects the structured-source key a static harvest produces', () => {
+    expect(isRenderableImageKey('originals/org/68/68912716802f8698.json')).toBe(false);
+  });
+
+  it('accepts the screenshot key a rendered harvest produces', () => {
+    expect(isRenderableImageKey('originals/org/68/68912716802f8698.png')).toBe(true);
+  });
+
+  it('accepts the usual image extensions, whatever their case', () => {
+    for (const key of ['a/b.JPG', 'a/b.jpeg', 'a/b.webp', 'a/b.gif', 'a/b.avif', 'a/b.svg']) {
+      expect({ key, ok: isRenderableImageKey(key) }).toMatchObject({ ok: true });
+    }
+  });
+
+  it('rejects documents, which have bytes but are not images', () => {
+    // These must still be downloadable — that path uses previewUrl, not this.
+    for (const key of ['a/b.pdf', 'a/b.docx', 'a/b.xlsx', 'a/b.bin', 'a/b']) {
+      expect({ key, ok: isRenderableImageKey(key) }).toMatchObject({ ok: false });
+    }
+  });
+
+  it('rejects the copy-only sentinel and empty input', () => {
+    expect(isRenderableImageKey('inline:abc123')).toBe(false);
+    expect(isRenderableImageKey(null)).toBe(false);
+    expect(isRenderableImageKey(undefined)).toBe(false);
+    expect(isRenderableImageKey('')).toBe(false);
+  });
+
+  it('trusts an absolute URL from a remote driver, as previewKeyKind does', () => {
+    expect(isRenderableImageKey('https://cdn.example.com/thumb/abc')).toBe(true);
   });
 });

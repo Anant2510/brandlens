@@ -440,10 +440,15 @@ function PagesSection({ pages }: { pages: Array<{ id: string; url: string; role:
         <ul className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {desktop.map((page) => (
             <li key={page.id} className="min-w-0">
-              <span className="block aspect-[4/3] overflow-hidden rounded border border-border bg-surface-2">
+              <span className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded border border-border bg-surface-2">
                 {page.previewUrl ? (
                   <img src={page.previewUrl} alt="" className="size-full object-cover object-top" />
-                ) : null}
+                ) : (
+                  // An empty grey box and a broken-image icon look identical to
+                  // a reader, and neither says why. A page read over plain HTTP
+                  // has no screenshot to show, and saying so is the answer.
+                  <span className="px-2 text-center text-[10px] leading-tight text-fg-subtle">No screenshot</span>
+                )}
               </span>
               <p className="mt-1 truncate text-[11px] font-medium text-fg">{page.title ?? shortPath(page.url)}</p>
               <p className="num truncate text-[11px] text-fg-subtle">
@@ -478,8 +483,26 @@ function ProvenanceFooter({
       <CardContent className="space-y-2 text-[11px] leading-5 text-fg-muted">
         <p>
           Crawled <span className="num">{run.originUrl}</span> on {formatDateTime(run.createdAt)}, honouring
-          robots.txt, at most {run.options.maxPages} pages and depth {run.options.maxDepth}. Colour and type were
-          measured from the browser&apos;s computed styles — exact values, not inferred from pixels.
+          robots.txt, at most {run.options.maxPages} pages and depth {run.options.maxDepth}.{' '}
+          {/*
+            This sentence is the whole point of this section — how much to trust
+            what is above it — and it was hardcoded to the rendered case. On a
+            run that fell back to plain HTTP it claimed values were "measured
+            from the browser's computed styles" when no browser ever ran them,
+            which is the one place in the report that must not be boilerplate.
+          */}
+          {report.coverage.harvestMode === 'static' ? (
+            <>
+              This site refused the rendered browser, so colour and type were read from the CSS it serves to a plain
+              request — parsed values rather than measured ones, without the cascade resolved. Treat them as
+              lower-confidence, and note that no page screenshots exist for this run.
+            </>
+          ) : (
+            <>
+              Colour and type were measured from the browser&apos;s computed styles — exact values, not inferred from
+              pixels.
+            </>
+          )}
         </p>
         <p>
           All {report.ruleset.proposed} rules are <strong className="font-medium text-fg">proposed</strong>. None is
